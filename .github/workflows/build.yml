@@ -1,0 +1,95 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # วาง APK ไว้ใน Releases (ไม่กินโควตา artifact)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > app/release.jks
+            echo "ใช้กุญแจเซ็นจาก Secrets"
+          else
+            echo "::warning::ไม่มี KEYSTORE_BASE64 – เซ็นด้วย debug key (ติดตั้งได้ แต่อัปเดตทับไม่ได้เมื่อเปลี่ยนเป็นกุญแจจริง)"
+          fi
+
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon testReleaseUnitTest 2>&1 | tee test.log
+
+      - name: Build APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon assembleRelease 2>&1 | tee build.log
+
+      - name: Report errors as annotations
+        if: failure()
+        run: |
+          cat test.log build.log 2>/dev/null | grep -E "^e: |FAILED|What went wrong|Exception" -A1 | head -40 | while IFS= read -r l; do
+            [ -n "$l" ] && echo "::error::$l"
+          done
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f app/release.jks
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/*.apk "out/UnitConverter-${GITHUB_RUN_NUMBER}.apk"
+          ls -la out
+
+      - name: Permissions in APK (ตรวจว่าไม่มีสิทธิ์อินเทอร์เน็ต)
+        run: |
+          set -eo pipefail
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt2 | sort -V | tail -1)
+          "$AAPT" dump permissions out/*.apk > perms.txt
+          cat perms.txt
+          grep -q "MANAGE_EXTERNAL_STORAGE" perms.txt     # ตรวจว่าอ่านรายการสิทธิ์ได้จริง
+          if grep -qE "android.permission.(INTERNET|ACCESS_NETWORK_STATE)" perms.txt; then echo "::error::APK มีสิทธิ์เครือข่าย"; exit 1; fi
+          echo "::notice title=APK permissions::$(grep -o 'name=.[A-Za-z0-9_.]*' perms.txt | sed 's/name=.//' | tr '\n' ' ')"
+
+      - name: Publish APK to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # main → apk-latest • branch อื่น (สั่ง build เอง) → apk-features ไม่ทับของ main
+          if [ "$GITHUB_REF_NAME" = "main" ]; then TAG=apk-latest; else TAG=apk-features; fi
+          gh release view $TAG >/dev/null 2>&1 || gh release create $TAG --prerelease --target "$GITHUB_SHA" --title "APK ล่าสุด ($TAG)" --notes "Unit Converter APK จาก build ล่าสุดของ $GITHUB_REF_NAME (แทนที่ทุกครั้ง)"
+          gh release upload $TAG out/*.apk --clobber
+          for a in $(gh release view $TAG --json assets --jq '.assets[].name'); do
+            [ "$a" = "$(basename out/*.apk)" ] || gh release delete-asset $TAG "$a" -y
+          done
+          echo "::notice title=APK::ดาวน์โหลดได้ที่ Releases → $TAG → $(basename out/*.apk)"
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true      # โควตาเต็มก็ยังได้ APK จาก Releases
+        with:
+          name: UnitConverter-apk
+          path: out/*.apk
+          retention-days: 14

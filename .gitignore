@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+# กุญแจเซ็นแอป – ห้ามขึ้น GitHub เด็ดขาด (ใช้ผ่าน Secrets เท่านั้น)
+*.jks
+*.keystore
+signing.txt
+# ไฟล์กุญแจของตู้
+*.key

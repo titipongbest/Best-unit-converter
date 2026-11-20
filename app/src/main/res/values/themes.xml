@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.BestSpace" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bs_bg</item>
+        <item name="android:statusBarColor">@color/bs_bg</item>
+        <item name="android:navigationBarColor">@color/bs_bg</item>
+    </style>
+    <color name="bs_bg">#FF14161C</color>
+    <color name="bs_accent">#FF5B8CFF</color>
+    <color name="bs_icon_bg">#FFE8F1FD</color>
+</resources>

@@ -1,0 +1,15 @@
+{
+ "app": "BestSpace",
+ "version": 1,
+ "kdf": {
+  "name": "scrypt",
+  "n": 131072,
+  "r": 8,
+  "p": 1,
+  "salt": "SzHVdMZdMxCdiMhLF5LTvw=="
+ },
+ "master": {
+  "nonce": "9xhTtKhg+qOemg6v",
+  "ct": "OKFu9xiXWeap2qOuGHP247jDXlnErT4CxegoXirU8vRwtmp7RgloEsQ9lENnn+PE"
+ }
+}
