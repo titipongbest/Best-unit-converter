@@ -125,7 +125,7 @@ import java.util.Locale
 enum class PickMode { MEDIA, FILES, FOLDER, BSX }
 
 sealed class InAppPickResult {
-    data class Sources(val items: List<Source>, val folderBase: File? = null) : InAppPickResult()
+    data class Sources(val items: List<Source>, val folderBases: List<File> = emptyList()) : InAppPickResult()
     data object UseSystemPicker : InAppPickResult()
 }
 
@@ -622,12 +622,25 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
                     Column {
                         Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 18.sp)
                         if (pickedOrder.isNotEmpty()) {
-                            Text("เลือกแล้ว ${pickedOrder.size} รายการ", fontSize = 12.sp, color = Palette.Accent)
+                            Text(
+                                if (a.mode == PickMode.FOLDER) "เลือกแล้ว ${pickedOrder.size} โฟลเดอร์"
+                                else "เลือกแล้ว ${pickedOrder.size} รายการ",
+                                fontSize = 12.sp,
+                                color = Palette.Accent,
+                            )
                         } else if (a.mode == PickMode.MEDIA && !browseFolders) {
                             Text(
                                 "${filteredMedia.size}${if (mediaMoreLoading) "+" else ""} รายการ • กดค้างเพื่อดูตัวอย่าง",
                                 fontSize = 11.sp,
                                 color = Palette.Muted,
+                            )
+                        } else if (a.mode == PickMode.FOLDER) {
+                            Text(
+                                "แตะช่อง ✓ เพื่อเลือกหลายโฟลเดอร์ • แตะชื่อเพื่อเปิด",
+                                fontSize = 11.sp,
+                                color = Palette.Muted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -672,6 +685,37 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
                             }
                         }
                     } else {
+                        if (a.mode == PickMode.FOLDER) {
+                            val dirsInView = dirFiles.filter { it.isDir }
+                            if (dirsInView.isNotEmpty()) {
+                                val allDirsSelected = dirsInView.all { isPicked("d:${it.file.absolutePath}") }
+                                IconButton(onClick = {
+                                    if (allDirsSelected) {
+                                        dirsInView.forEach { d ->
+                                            val k = "d:${d.file.absolutePath}"
+                                            pickedMap.remove(k)
+                                            pickedOrder.remove(k)
+                                        }
+                                    } else {
+                                        dirsInView.forEach { d ->
+                                            val f = d.file
+                                            val k = "d:${f.absolutePath}"
+                                            if (!pickedMap.containsKey(k)) {
+                                                val cand = PickerCandidate(k, f.name, 0L, null, f, null, false, path = f.absolutePath)
+                                                pickedMap[k] = cand
+                                                pickedOrder.add(k)
+                                            }
+                                        }
+                                    }
+                                }) {
+                                    Icon(
+                                        Icons.Filled.SelectAll,
+                                        "เลือกทั้งหมด",
+                                        tint = if (allDirsSelected) Palette.Accent else Palette.Fg,
+                                    )
+                                }
+                            }
+                        }
                         IconButton(onClick = { refreshEpoch++ }) {
                             Icon(Icons.Filled.Refresh, "รีเฟรช")
                         }
@@ -713,19 +757,40 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
         bottomBar = {
             if (a.mode == PickMode.FOLDER) {
                 Surface(color = Palette.Panel, tonalElevation = 4.dp) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(currentDir.name.ifBlank { activeRoot.name }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("ในชั้นนี้มี $dirFileCount ไฟล์ (รวมโฟลเดอร์ย่อยทั้งหมด)", fontSize = 12.sp, color = Palette.Muted)
+                    if (pickedOrder.isNotEmpty()) {
+                        val names = pickedOrder.mapNotNull { pickedMap[it]?.name }.joinToString(", ")
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("เลือก ${pickedOrder.size} โฟลเดอร์", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                Text(names, fontSize = 12.sp, color = Palette.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            TextButton(onClick = ::clearPicks) { Text("ล้าง") }
+                            Spacer(Modifier.width(6.dp))
+                            Button(onClick = {
+                                val dirs = pickedOrder.mapNotNull { pickedMap[it]?.let { c -> c.file ?: c.path?.let(::File) } }
+                                a.result.complete(InAppPickResult.Sources(emptyList(), folderBases = dirs))
+                            }) {
+                                Text("นำเข้า (${pickedOrder.size})")
+                            }
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Button(onClick = {
-                            a.result.complete(InAppPickResult.Sources(emptyList(), folderBase = currentDir))
-                        }) {
-                            Text("เลือกโฟลเดอร์นี้")
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(currentDir.name.ifBlank { activeRoot.name }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("ในชั้นนี้มี $dirFileCount ไฟล์ (รวมโฟลเดอร์ย่อยทั้งหมด)", fontSize = 12.sp, color = Palette.Muted)
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Button(onClick = {
+                                a.result.complete(InAppPickResult.Sources(emptyList(), folderBases = listOf(currentDir)))
+                            }) {
+                                Text("เลือกโฟลเดอร์นี้")
+                            }
                         }
                     }
                 }
@@ -881,8 +946,11 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
                             item(key = "__empty__") {
                                 Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
                                     Text(
-                                        if (a.mode == PickMode.FOLDER) "ไม่มีโฟลเดอร์ย่อยในชั้นนี้ (กด “เลือกโฟลเดอร์นี้” ด้านล่างได้เลย)"
-                                        else "โฟลเดอร์นี้ว่างเปล่า",
+                                        when {
+                                            a.mode == PickMode.FOLDER && pickedOrder.isNotEmpty() -> "ไม่มีโฟลเดอร์ย่อยในชั้นนี้"
+                                            a.mode == PickMode.FOLDER -> "ไม่มีโฟลเดอร์ย่อยในชั้นนี้ (กด “เลือกโฟลเดอร์นี้” ด้านล่างได้เลย)"
+                                            else -> "โฟลเดอร์นี้ว่างเปล่า"
+                                        },
                                         color = Palette.Muted,
                                         fontSize = 13.sp,
                                     )
@@ -892,16 +960,49 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
                         items(dirFiles, key = { it.file.absolutePath }) { entry ->
                             val f = entry.file
                             if (entry.isDir) {
-                                Row(
-                                    Modifier.fillMaxWidth().clickable { currentDir = f }
-                                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Icon(Icons.Filled.Folder, null, tint = Palette.Folder, modifier = Modifier.size(30.dp))
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(f.name, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("โฟลเดอร์", fontSize = 12.sp, color = Palette.Muted)
+                                if (a.mode == PickMode.FOLDER) {
+                                    val key = "d:${f.absolutePath}"
+                                    val picked = isPicked(key)
+                                    val cand = PickerCandidate(
+                                        key = key,
+                                        name = f.name,
+                                        size = 0L,
+                                        mime = null,
+                                        file = f,
+                                        uri = null,
+                                        isVideo = false,
+                                        path = f.absolutePath,
+                                    )
+                                    Row(
+                                        Modifier.fillMaxWidth()
+                                            .background(if (picked) Palette.Accent.copy(alpha = 0.14f) else Color.Transparent)
+                                            .combinedClickable(
+                                                onClick = { currentDir = f },
+                                                onLongClick = { togglePick(cand) },
+                                            )
+                                            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(Icons.Filled.Folder, null, tint = Palette.Folder, modifier = Modifier.size(30.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(f.name, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text("โฟลเดอร์ • แตะเพื่อเปิด", fontSize = 12.sp, color = Palette.Muted)
+                                        }
+                                        Checkbox(checked = picked, onCheckedChange = { togglePick(cand) })
+                                    }
+                                } else {
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable { currentDir = f }
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Icon(Icons.Filled.Folder, null, tint = Palette.Folder, modifier = Modifier.size(30.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(f.name, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text("โฟลเดอร์", fontSize = 12.sp, color = Palette.Muted)
+                                        }
                                     }
                                 }
                             } else {

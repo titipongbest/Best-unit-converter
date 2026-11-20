@@ -42,4 +42,16 @@ class StorageTest {
         val emptyParent = File(tmp, "empty").apply { mkdirs() }
         org.junit.Assert.assertEquals(null, Storage.resolveVaultDir(emptyParent))
     }
+
+    @Test fun pruneNestedFoldersDeduplicatesAndDropsSubfoldersWithoutDroppingSiblings() {
+        val tmp = Files.createTempDirectory("bs-prune").toFile()
+        val a = File(tmp, "A").apply { mkdirs() }
+        val aSub = File(a, "Sub").apply { mkdirs() }
+        val a2 = File(tmp, "A2").apply { mkdirs() }
+        val b = File(tmp, "B").apply { mkdirs() }
+
+        val pruned = pruneNestedFolders(listOf(aSub, a, a2, File(a.absolutePath), b))
+        org.junit.Assert.assertEquals(listOf(a, b, a2).map { it.canonicalPath }.toSet(), pruned.map { it.canonicalPath }.toSet())
+        org.junit.Assert.assertEquals(3, pruned.size)
+    }
 }

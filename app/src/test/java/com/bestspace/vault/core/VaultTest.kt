@@ -412,5 +412,32 @@ class VaultTest {
         blob.writeBytes(bytes)
         try { v.readBytes(fid); fail() } catch (_: CorruptData) {}
     }
+
+    @Test fun perFolderViewSettingsPersistInEncryptedIndex() {
+        val dir = tmp()
+        val v = Vault(File(dir, ".bestspace"), null)
+        v.create("pass-1234", useKeyfile = false)
+        val d1 = v.createFolder("Work", null)
+        val d2 = v.createFolder("Travel", null)
+
+        assertEquals(0 to 3, v.folderView(null))
+        assertEquals(0 to 3, v.folderView(d1))
+        assertEquals(0 to 3, v.folderView(d2))
+
+        v.setFolderView(null, sort = 2, cols = 5)
+        v.setFolderView(d1, sort = 4, cols = 2)
+        v.setFolderView(d2, sort = 1, cols = 9) // clamped to 6
+        v.lock()
+
+        v.unlock("pass-1234")
+        assertEquals(2 to 5, v.folderView(null))
+        assertEquals(4 to 2, v.folderView(d1))
+        assertEquals(1 to 6, v.folderView(d2))
+
+        v.setFolderView(d1, sort = 0, cols = 3)
+        assertEquals(0 to 3, v.folderView(d1))
+        assertEquals(2 to 5, v.folderView(null))
+        assertEquals(1 to 6, v.folderView(d2))
+    }
 }
 

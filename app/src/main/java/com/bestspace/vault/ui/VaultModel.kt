@@ -50,7 +50,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -188,8 +190,8 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     var query by mutableStateOf("")
     var searchOpen by mutableStateOf(false)
     var filter by mutableStateOf("all")
-    var sort by mutableIntStateOf(prefs.getInt("sort", 0))
-    var columns by mutableIntStateOf(prefs.getInt("columns", 3))
+    var sort by mutableIntStateOf(0)
+    var columns by mutableIntStateOf(3)
     var numpad by mutableStateOf(prefs.getBoolean("numpad", true))   // หน้าปลดล็อค: ปุ่มตัวเลขในแอป แทนคีย์บอร์ดของเครื่อง
     var version by mutableIntStateOf(0)
     var thumbEpoch by mutableIntStateOf(0)       // เพิ่มเมื่อภาพย่อเปลี่ยน (ตั้งภาพปก / ล้างแคช)
@@ -276,6 +278,9 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     val shareDir get() = File(app.cacheDir, "share")
 
     init {
+        if (prefs.contains("sort") || prefs.contains("columns")) {
+            prefs.edit().remove("sort").remove("columns").apply()
+        }
         gate = initialGate()
         refreshWait()
         refreshNeedsKey()
@@ -347,7 +352,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     }
     fun lockout() = Lockout(vault, app.filesDir)
 
-    /** กดปุ่มเพิ่มโน้ตค้าง 2 วิ → เข้าหน้าตู้ (ขอสิทธิ์/สร้างตู้/ใส่รหัส) */
+    /** กดปุ่ม C ติดต่อกัน 3 ครั้ง → เข้าหน้าตู้ (ขอสิทธิ์/สร้างตู้/ใส่รหัส) */
     fun revealVault() {
         if (gate != Gate.MAIN) { gate = initialGate(); refreshWait(); refreshNeedsKey() }
         decoy = false
@@ -510,6 +515,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         clearClipboard(false)
         viewer = null; fullscreen = false
         selected.clear(); folder = null; query = ""; searchOpen = false
+        sort = 0; columns = 3
         listing = Listing()
         thumbEpoch++
         val old = ArrayList<Bitmap>()
@@ -857,6 +863,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         gate = Gate.MAIN
         unlockMsg = null; keyMissing = false
         refreshNeedsKey()
+        syncFolderView()
         refresh()
     }
 
@@ -1150,18 +1157,51 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         return Listing(dItems + files, counts, ents.size, dirs.size, total, crumbs, q.isNotEmpty())
     }
 
-    fun openFolder(d: String?) { folder = d; selected.clear(); query = ""; searchOpen = false; refresh() }
+    private val viewSaveMutex = Mutex()
+
+    private fun syncFolderView() {
+        val (s, c) = try { synchronized(vault) { vault.folderView(folder) } } catch (_: Exception) { 0 to 3 }
+        sort = s.coerceIn(0, SORTS.lastIndex)
+        columns = c.coerceIn(2, 6)
+    }
+
+    private fun saveFolderViewAsync(did: String?, sortVal: Int? = null, colsVal: Int? = null) {
+        val targetVault = vault
+        if (!targetVault.isUnlocked) return
+        viewModelScope.launch(Dispatchers.IO) {
+            viewSaveMutex.withLock {
+                try {
+                    synchronized(targetVault) {
+                        if (vault === targetVault && targetVault.isUnlocked) {
+                            targetVault.setFolderView(did, sort = sortVal, cols = colsVal)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun openFolder(d: String?) { folder = d; selected.clear(); query = ""; searchOpen = false; syncFolderView(); refresh() }
 
     fun up(): Boolean {
         val f = folder ?: return false
         folder = synchronized(vault) { if (vault.isUnlocked) vault.parentOf(f) else null }
-        selected.clear(); refresh()
+        selected.clear(); syncFolderView(); refresh()
         return true
     }
 
-    fun setSortMode(i: Int) { sort = i; prefs.edit().putInt("sort", i).commit(); refresh() }
+    fun setSortMode(i: Int) {
+        val s = i.coerceIn(0, SORTS.lastIndex)
+        sort = s
+        saveFolderViewAsync(folder, sortVal = s)
+        refresh()
+    }
     fun setNumpadMode(on: Boolean) { numpad = on; prefs.edit().putBoolean("numpad", on).commit() }
-    fun setCols(n: Int) { columns = n.coerceIn(2, 6); prefs.edit().putInt("columns", columns).commit() }
+    fun setCols(n: Int) {
+        val c = n.coerceIn(2, 6)
+        columns = c
+        saveFolderViewAsync(folder, colsVal = c)
+    }
 
     /** ลากเรียงไฟล์เสร็จ: visible = ไฟล์ที่เห็นอยู่ (ตามแท็บกรอง) ในลำดับใหม่
      *  ไฟล์ที่ซ่อนอยู่ (แท็บกรองอื่น) คงตำแหน่งเดิม → บันทึกลำดับของทั้งโฟลเดอร์ แล้วสลับไปโหมด "กำหนดเอง" */
@@ -1357,12 +1397,12 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
 
     fun addMedia() = flow {
         val sources = pickSourcesInAppOrSystem(PickMode.MEDIA, arrayOf("image/*", "video/*"))
-        if (sources.isNotEmpty()) importSources(sources, null)
+        if (sources.isNotEmpty()) importSources(sources, emptyList())
     }
 
     fun addFiles() = flow {
         val sources = pickSourcesInAppOrSystem(PickMode.FILES, arrayOf("*/*"))
-        if (sources.isNotEmpty()) importSources(sources, null)
+        if (sources.isNotEmpty()) importSources(sources, emptyList())
     }
 
     private fun uriSource(u: Uri, path: List<String>): Source {
@@ -1371,22 +1411,25 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             app.contentResolver.getType(u), f, u, path)
     }
 
-    /** นำเข้าโฟลเดอร์: สร้างโฟลเดอร์ในตู้ชื่อเดียวกัน พร้อมโครงสร้างโฟลเดอร์ย่อย */
+    /** นำเข้าโฟลเดอร์ (เลือกได้หลายโฟลเดอร์พร้อมกัน): สร้างโฟลเดอร์ในตู้ชื่อเดียวกัน พร้อมโครงสร้างโฟลเดอร์ย่อย */
     fun addFolder() = flow {
-        val (base, uri) = when (val res = show(AskInAppPick(PickMode.FOLDER))) {
-            is InAppPickResult.Sources -> res.folderBase to null
+        val (bases, uri) = when (val res = show(AskInAppPick(PickMode.FOLDER))) {
+            is InAppPickResult.Sources -> pruneNestedFolders(res.folderBases.filter { it.isDirectory && it.canRead() }) to null
             is InAppPickResult.UseSystemPicker -> {
                 val u = pickTree() ?: return@flow
-                Storage.treeToFile(u)?.takeIf { it.isDirectory && it.canRead() } to u
+                val f = Storage.treeToFile(u)?.takeIf { it.isDirectory && it.canRead() }
+                (if (f != null) listOf(f) else emptyList()) to u
             }
             null -> return@flow
         }
         val sources = task("กำลังอ่านรายชื่อไฟล์…") {
             val out = ArrayList<Source>()
-            if (base != null) {
-                base.walkTopDown().filter { it.isFile }.forEach { f ->
-                    val rel = f.parentFile!!.relativeTo(base).path.split('/').filter { it.isNotEmpty() }
-                    out.add(Source(f.name, f.length(), null, f, null, listOf(base.name) + rel))
+            if (bases.isNotEmpty()) {
+                for (base in bases) {
+                    base.walkTopDown().onEnter { !isVaultOwn(it) }.filter { it.isFile }.forEach { f ->
+                        val rel = f.parentFile!!.relativeTo(base).path.split('/').filter { it.isNotEmpty() }
+                        out.add(Source(f.name, f.length(), null, f, null, listOf(base.name) + rel))
+                    }
                 }
             } else if (uri != null) {
                 val root = DocumentFile.fromTreeUri(app, uri) ?: throw VaultException("เปิดโฟลเดอร์ไม่ได้")
@@ -1400,8 +1443,8 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             }
             out
         }
-        if (sources.isEmpty()) { show(AskInfo("นำเข้าโฟลเดอร์", "โฟลเดอร์นี้ไม่มีไฟล์")); return@flow }
-        importSources(sources, base)
+        if (sources.isEmpty()) { show(AskInfo("นำเข้าโฟลเดอร์", "โฟลเดอร์ที่เลือกไม่มีไฟล์")); return@flow }
+        importSources(sources, bases)
     }
 
     /** ไฟล์ของตู้เอง (ในโฟลเดอร์ตู้) หรือไฟล์กุญแจ – ห้ามนำเข้า/ลบ (ลบแล้วตู้เปิดไม่ได้อีก) */
@@ -1428,7 +1471,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         return n.startsWith("bestspace") && n.endsWith(".key")
     }
 
-    private suspend fun importSources(all: List<Source>, base: File?) {
+    private suspend fun importSources(all: List<Source>, bases: List<File>) {
         val gen = lockGen
         val sources = all.filter { !isVaultOwn(it.file) }
         val skipped = all.size - sources.size
@@ -1541,12 +1584,15 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             }
             flush()                                            // ชุดสุดท้าย (รวมตอนกดยกเลิก: ไฟล์ที่เข้ารหัสเสร็จแล้วเก็บไว้)
             if (foldersUnsaved) synchronized(vault) { try { vault.saveIndex() } catch (_: Exception) {} }
-            if (wipe && base != null) {
+            if (wipe && bases.isNotEmpty()) {
                 // ลบโฟลเดอร์ต้นทางที่ว่างแล้ว (ไม่ทิ้งชื่อโฟลเดอร์ไว้) – ไม่ลบโฟลเดอร์มาตรฐาน เช่น DCIM, Pictures, Download
-                val dirs = sources.mapNotNull { it.file?.parentFile }.toSet() + base
+                val basePaths = bases.map { it.absolutePath.trimEnd('/') }
+                val dirs = sources.mapNotNull { it.file?.parentFile }.toSet() + bases
                 for (d in dirs.sortedByDescending { it.absolutePath.length }) {
                     var cur: File? = d
-                    while (cur != null && cur.absolutePath.startsWith(base.absolutePath)) {
+                    while (cur != null) {
+                        val cp = cur.absolutePath.trimEnd('/')
+                        if (basePaths.none { bp -> cp == bp || cp.startsWith("$bp/") }) break
                         if (Storage.isStandardDir(cur) || (cur.list()?.isNotEmpty() != false)) break
                         if (!cur.delete()) break
                         Storage.forgetMedia(app, cur.absolutePath)     // ไม่ให้ชื่อโฟลเดอร์ค้างในแอป Files ของระบบ
@@ -2160,4 +2206,18 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         vault.lock()
         wipeTemp()
     }
+}
+
+internal fun pruneNestedFolders(folders: List<File>): List<File> {
+    val resolved = folders.map { f ->
+        val p = try { f.canonicalPath } catch (_: Exception) { f.absolutePath }
+        p.trimEnd('/') to f
+    }.distinctBy { it.first }.sortedBy { it.first.length }
+    val kept = ArrayList<Pair<String, File>>()
+    for (item in resolved) {
+        if (kept.none { (kp, _) -> item.first == kp || item.first.startsWith("$kp/") }) {
+            kept.add(item)
+        }
+    }
+    return kept.map { it.second }
 }

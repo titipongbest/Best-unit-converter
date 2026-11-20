@@ -5,12 +5,10 @@ package com.bestspace.vault.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +54,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,7 +65,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -86,10 +84,11 @@ import kotlin.math.abs
 /**
  * หน้าพราง: แอปแปลงหน่วย (Unit Converter) แบบออฟไลน์
  * – แตะปุ่มสลับหน่วย (⇄) = สลับหน่วยต้นทาง/ปลายทางตามปกติ
- * – กดปุ่มสลับหน่วย (⇄) ค้างไว้ 2.5 วินาที = เข้าหน้ารหัสผ่านของตู้ (ไม่มีสั่น/ภาพบอกใบ้)
+ * – กดปุ่ม C ติดต่อกัน 3 ครั้ง = เข้าหน้ารหัสผ่านของตู้ (ไม่มีสั่น/ภาพบอกใบ้)
  */
 object DecoyConverter {
-    const val HOLD_MS = 2500L
+    const val REVEAL_C_TAPS = 3
+    const val REVEAL_WINDOW_MS = 3000L
 
     data class HistoryItem(
         val id: Long,
@@ -365,12 +364,19 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
     var fromIdx by remember { mutableIntStateOf(initial.second) }
     var toIdx by remember { mutableIntStateOf(initial.third) }
     var inputRaw by remember { mutableStateOf("1") }
+    var cTapCount by remember { mutableIntStateOf(0) }
+    var lastCTapMs by remember { mutableLongStateOf(0L) }
     var showHistory by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var copiedBanner by remember { mutableStateOf(false) }
     val history = remember { mutableStateListOf<DecoyConverter.HistoryItem>().apply { addAll(DecoyConverter.loadHistory(ctx)) } }
     val locked = remember(settings) { NotesLockStore.isSet(ctx) }
     val hold by rememberUpdatedState(onHold)
+
+    fun resetRevealTaps() {
+        cTapCount = 0
+        lastCTapMs = 0L
+    }
 
     LaunchedEffect(copiedBanner) {
         if (copiedBanner) {
@@ -394,6 +400,7 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
     val oneUnitText = UnitConverterEngine.formatValue(UnitConverterEngine.convert(1.0, fromUnit, toUnit))
 
     fun persistState(c: Int, f: Int, t: Int) {
+        resetRevealTaps()
         catIdx = c
         fromIdx = f
         toIdx = t
@@ -431,8 +438,19 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
     }
 
     fun onKey(k: String) {
+        if (k == "C") {
+            inputRaw = "0"
+            val now = SystemClock.elapsedRealtime()
+            cTapCount = if (now - lastCTapMs <= DecoyConverter.REVEAL_WINDOW_MS) cTapCount + 1 else 1
+            lastCTapMs = now
+            if (cTapCount >= DecoyConverter.REVEAL_C_TAPS) {
+                resetRevealTaps()
+                hold()
+            }
+            return
+        }
+        resetRevealTaps()
         when (k) {
-            "C" -> inputRaw = "0"
             "⌫" -> {
                 inputRaw = when {
                     inputRaw.length <= 1 || (inputRaw.length == 2 && inputRaw.startsWith("-")) -> "0"
@@ -552,26 +570,15 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
                 )
             }
 
-            // ปุ่มสลับหน่วย (⇄): แตะปกติ = สลับหน่วย, กดค้าง 2.5 วิ = เข้าหน้าตู้ (ไม่แสดงอาการใดๆ)
+            // ปุ่มสลับหน่วย (⇄): สลับหน่วยต้นทาง/ปลายทาง
             Box(
                 Modifier.align(Alignment.Center)
                     .size(48.dp)
                     .shadow(6.dp, CircleShape)
+                    .clip(CircleShape)
                     .background(NoteColors.Accent, CircleShape)
                     .border(3.dp, NoteColors.Bg, CircleShape)
-                    .pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            var released = false
-                            val up = withTimeoutOrNull(DecoyConverter.HOLD_MS) {
-                                waitForUpOrCancellation().also { released = true }
-                            }
-                            when {
-                                !released -> hold()
-                                up != null -> { up.consume(); swapUnits() }
-                            }
-                        }
-                    },
+                    .clickable { swapUnits() },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.Filled.SwapHoriz, "สลับหน่วย", tint = NoteColors.OnAccent, modifier = Modifier.size(24.dp))

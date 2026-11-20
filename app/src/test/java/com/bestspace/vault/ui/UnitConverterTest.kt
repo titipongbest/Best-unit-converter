@@ -36,10 +36,11 @@ class UnitConverterTest {
     }
 
     @Test
-    fun formattingAndHoldDuration() {
+    fun formattingAndRevealTaps() {
         assertEquals("1,000", UnitConverterEngine.formatValue(1000.0))
         assertEquals("0", UnitConverterEngine.formatValue(-0.0))
         assertEquals("1,234.5", UnitConverterEngine.formatInputDisplay("1234.5"))
-        assertTrue(DecoyConverter.HOLD_MS in 2000L..3000L)
+        assertEquals(3, DecoyConverter.REVEAL_C_TAPS)
+        assertTrue(DecoyConverter.REVEAL_WINDOW_MS >= 1500L)
     }
 }

@@ -237,12 +237,21 @@ class RealUseTest {
         val c = swapBtn.visibleCenter
         swapBtn.click(); pause(400)
         check("แตะ ⇄ สั้นๆ = สลับหน่วยปกติ (ไม่เข้าตู้)", main { model.decoy })
-        hold(c.x, c.y, 1200)                                 // กดค้าง 1.2 วิ แล้วปล่อย
-        pause(600)
-        check("กด ⇄ ค้างไม่ถึง 2.5 วิ ยังไม่เข้าตู้", main { model.decoy })
-        hold(c.x, c.y, 3200)                                 // กดค้าง 3.2 วิ
+        hold(c.x, c.y, 2800)                                 // กดค้าง ⇄ ไม่เข้าตู้แล้ว
+        pause(400)
+        check("กด ⇄ ค้างก็ไม่เข้าตู้", main { model.decoy })
+        val cBtn = dev.wait(Until.findObject(By.text("C")), 5_000)
+        val k5 = dev.findObject(By.text("5"))
+        check("มีปุ่ม C ในหน้า Unit Converter", cBtn != null)
+        if (cBtn == null) return
+        cBtn.click(); pause(200); cBtn.click(); pause(200)
+        check("กด C 2 ครั้ง ยังไม่เข้าตู้", main { model.decoy })
+        k5?.click(); pause(200)
+        cBtn.click(); pause(200); cBtn.click(); pause(200)
+        check("คั่นด้วยปุ่มอื่นแล้วกด C 2 ครั้ง ยังไม่เข้าตู้", main { model.decoy })
+        cBtn.click()
         waitFor("เข้าหน้าตู้", 8_000) { !model.decoy }
-        check("กด ⇄ ค้าง 2.5–3 วิ = เข้าหน้าตู้", !main { model.decoy }, "gate=${main { model.gate }}")
+        check("กด C ติดต่อกัน 3 ครั้ง = เข้าหน้าตู้", !main { model.decoy }, "gate=${main { model.gate }}")
         check("ยังไม่มีตู้ → หน้าสร้างตู้", main { model.gate } == Gate.SETUP, "gate=${main { model.gate }}")
 
         // ---------------- 2) สร้างตู้ (มีไฟล์กุญแจ = ค่าเริ่มต้น)

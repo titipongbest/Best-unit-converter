@@ -925,6 +925,43 @@ class Vault(val root: File, val keyDir: File?) {
         saveIndex()
     }
 
+    /** อ่านการตั้งค่ามุมมอง (sort, cols) ของโฟลเดอร์จากดัชนีที่เข้ารหัส (did == null = หน้าหลักของตู้) */
+    @Synchronized fun folderView(did: String?): Pair<Int, Int> {
+        if (master == null || index == null) return 0 to 3
+        val s: Long
+        val c: Long
+        if (did == null) {
+            val idx = index!!
+            s = (idx["root_sort"] as? Number)?.toLong() ?: 0L
+            c = (idx["root_cols"] as? Number)?.toLong() ?: 3L
+        } else {
+            val f = folders()[did]?.asMap() ?: return 0 to 3
+            s = (f["sort"] as? Number)?.toLong() ?: 0L
+            c = (f["cols"] as? Number)?.toLong() ?: 3L
+        }
+        return s.toInt() to c.toInt().coerceIn(2, 6)
+    }
+
+    /** บันทึกการตั้งค่ามุมมอง (sort / cols) ของแต่ละโฟลเดอร์ลงในดัชนีที่เข้ารหัส (ไม่ทิ้งร่องรอยใน prefs) */
+    @Synchronized fun setFolderView(did: String?, sort: Int? = null, cols: Int? = null) {
+        need()
+        val target: MutableMap<String, Any?> = if (did == null) {
+            index!!
+        } else {
+            folders()[did] as? MutableMap<String, Any?> ?: return
+        }
+        val sortKey = if (did == null) "root_sort" else "sort"
+        val colsKey = if (did == null) "root_cols" else "cols"
+        if (sort != null) {
+            if (sort == 0) target.remove(sortKey) else target[sortKey] = sort.toLong()
+        }
+        if (cols != null) {
+            val clamped = cols.coerceIn(2, 6)
+            if (clamped == 3) target.remove(colsKey) else target[colsKey] = clamped.toLong()
+        }
+        saveIndex()
+    }
+
     /** ไฟล์ทั้งหมดใต้โฟลเดอร์ (รวมโฟลเดอร์ย่อย) → (file_id, [ชื่อโฟลเดอร์จาก did ลงไป]) */
     @Synchronized fun walk(did: String): List<Pair<String, List<String>>> {
         val dirs = folders()
