@@ -29,6 +29,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowRight
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
@@ -330,7 +332,27 @@ private fun MoveDialog(model: VaultModel, a: AskMove) {
     var target by remember(a) { mutableStateOf<String?>(null) }
     var epoch by remember(a) { mutableStateOf(0) }
     var newName by remember(a) { mutableStateOf("") }
+    var expanded by remember(a) { mutableStateOf(emptySet<String>()) }
     val tree = remember(a, epoch) { model.folderTree(a.exclude) }
+    val hasKids = remember(tree) {
+        buildSet {
+            for (i in 0 until tree.lastIndex) {
+                if (tree[i + 1].third > tree[i].third) add(tree[i].first)
+            }
+        }
+    }
+    val visible = remember(tree, expanded, hasKids) {
+        val out = ArrayList<Triple<String, String, Int>>()
+        var hiddenBelow = Int.MAX_VALUE
+        for (node in tree) {
+            val (id, _, depth) = node
+            if (depth > hiddenBelow) continue
+            hiddenBelow = Int.MAX_VALUE
+            out.add(node)
+            if (id in hasKids && id !in expanded) hiddenBelow = depth
+        }
+        out
+    }
     AlertDialog(
         onDismissRequest = { a.result.complete(false to null) },
         title = { Text("ย้ายไปที่…") },
@@ -340,15 +362,32 @@ private fun MoveDialog(model: VaultModel, a: AskMove) {
                     item {
                         FolderRow("ตู้ของฉัน", 0, target == null, home = true) { target = null }
                     }
-                    items(tree, key = { it.first }) { (id, name, depth) ->
-                        FolderRow(name, depth + 1, target == id) { target = id }
+                    items(visible, key = { it.first }) { (id, name, depth) ->
+                        val canExpand = id in hasKids
+                        val isOpen = id in expanded
+                        FolderRow(
+                            name = name,
+                            depth = depth,
+                            selected = target == id,
+                            hasKids = canExpand,
+                            expanded = isOpen,
+                            onToggle = {
+                                expanded = if (isOpen) expanded - id else expanded + id
+                            },
+                            onClick = { target = id },
+                        )
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IncognitoField(newName, { newName = it }, "โฟลเดอร์ใหม่ในที่ที่เลือก", Modifier.weight(1f))
                     IconButton(onClick = {
                         if (newName.isNotBlank()) {
-                            model.createFolderIn(newName.trim(), target)?.let { target = it; newName = ""; epoch++ }
+                            model.createFolderIn(newName.trim(), target)?.let { created ->
+                                target?.let { parentId -> expanded = expanded + parentId }
+                                target = created
+                                newName = ""
+                                epoch++
+                            }
                         }
                     }) { Icon(Icons.Filled.CreateNewFolder, "สร้าง", tint = Palette.Accent) }
                 }
@@ -360,17 +399,58 @@ private fun MoveDialog(model: VaultModel, a: AskMove) {
 }
 
 @Composable
-private fun FolderRow(name: String, depth: Int, selected: Boolean, home: Boolean = false, onClick: () -> Unit) {
+private fun FolderRow(
+    name: String,
+    depth: Int,
+    selected: Boolean,
+    home: Boolean = false,
+    hasKids: Boolean = false,
+    expanded: Boolean = false,
+    onToggle: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp))
             .background(if (selected) Palette.Accent.copy(alpha = 0.25f) else Color.Transparent)
-            .clickable(onClick = onClick).padding(start = (8 + depth * 16).dp, top = 10.dp, bottom = 10.dp, end = 8.dp),
+            .clickable(onClick = onClick)
+            .padding(
+                start = if (home) 8.dp else (8 + depth * 18).dp,
+                top = if (home) 10.dp else 6.dp,
+                bottom = if (home) 10.dp else 6.dp,
+                end = 8.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(if (home) Icons.Filled.Home else Icons.Filled.Folder, null, tint = if (home) Palette.Accent else Palette.Folder,
-            modifier = Modifier.size(20.dp))
+        if (!home) {
+            if (hasKids && onToggle != null) {
+                Box(
+                    Modifier.size(30.dp).clip(RoundedCornerShape(6.dp)).clickable(onClick = onToggle),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (expanded) Icons.Filled.ArrowDropDown else Icons.Filled.ArrowRight,
+                        contentDescription = if (expanded) "ย่อ" else "ขยาย",
+                        tint = Palette.Muted,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            } else {
+                Spacer(Modifier.width(30.dp))
+            }
+        }
+        Icon(
+            if (home) Icons.Filled.Home else Icons.Filled.Folder,
+            null,
+            tint = if (home) Palette.Accent else Palette.Folder,
+            modifier = Modifier.size(20.dp),
+        )
         Spacer(Modifier.width(8.dp))
-        Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+        Text(
+            name,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        )
     }
 }
 

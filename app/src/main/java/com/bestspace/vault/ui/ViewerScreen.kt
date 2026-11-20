@@ -1,16 +1,21 @@
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, UnstableApi::class)
 
 package com.bestspace.vault.ui
 
 import android.graphics.Bitmap
 import android.view.TextureView
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -24,6 +29,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,6 +45,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -96,15 +104,19 @@ import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.SeekParameters
 import com.bestspace.vault.core.Mime
 import com.bestspace.vault.core.TextCodec
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 @Composable
 fun ViewerScreen(model: VaultModel, v: ViewerState) {
@@ -215,8 +227,15 @@ private fun clampOffset(o: Offset, size: IntSize, s: Float): Offset {
 
 /** แตะ = ซ่อน/แสดงแถบควบคุม • แตะสองครั้ง = ซูม 2.5 เท่าตรงจุดที่แตะ / กลับพอดีจอ • สองนิ้ว = ซูม • ลาก (ตอนซูม) = เลื่อน */
 /** onDoubleTap: ถ้าระบุ แตะสองครั้งจะเรียกอันนี้แทนการซูม – ยังซูมด้วยสองนิ้วได้ */
-fun Modifier.zoomGestures(z: ZoomState, onTap: () -> Unit, onZoom: (Boolean) -> Unit,
-                          onDoubleTap: ((Offset, IntSize) -> Unit)? = null): Modifier = this
+fun Modifier.zoomGestures(
+    z: ZoomState,
+    onTap: () -> Unit,
+    onZoom: (Boolean) -> Unit,
+    onDoubleTap: ((Offset, IntSize) -> Unit)? = null,
+    onHorizontalScrubStart: (() -> Unit)? = null,
+    onHorizontalScrub: ((deltaX: Float, width: Int) -> Unit)? = null,
+    onHorizontalScrubEnd: (() -> Unit)? = null,
+): Modifier = this
     .pointerInput(z) {
         detectTapGestures(
             onTap = { onTap() },
@@ -235,16 +254,43 @@ fun Modifier.zoomGestures(z: ZoomState, onTap: () -> Unit, onZoom: (Boolean) -> 
     .pointerInput(z) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false)
-            do {
-                val ev = awaitPointerEvent()
-                if (ev.changes.size > 1 || z.scale > 1f) {
-                    val ns = (z.scale * ev.calculateZoom()).coerceIn(1f, 8f)
-                    z.scale = ns
-                    z.offset = if (ns <= 1.001f) Offset.Zero else clampOffset(z.offset + ev.calculatePan(), size, ns)
-                    onZoom(ns > 1.001f)
-                    ev.changes.forEach { if (it.positionChanged()) it.consume() }
-                }
-            } while (ev.changes.any { it.pressed })
+            var draggingH = false
+            var accX = 0f
+            var accY = 0f
+            val slop = viewConfiguration.touchSlop
+            try {
+                do {
+                    val ev = awaitPointerEvent()
+                    if (ev.changes.size > 1 || z.scale > 1f) {
+                        if (draggingH) {
+                            draggingH = false
+                            onHorizontalScrubEnd?.invoke()
+                        }
+                        val ns = (z.scale * ev.calculateZoom()).coerceIn(1f, 8f)
+                        z.scale = ns
+                        z.offset = if (ns <= 1.001f) Offset.Zero else clampOffset(z.offset + ev.calculatePan(), size, ns)
+                        onZoom(ns > 1.001f)
+                        ev.changes.forEach { if (it.positionChanged()) it.consume() }
+                    } else if (onHorizontalScrub != null && ev.changes.size == 1) {
+                        val c = ev.changes[0]
+                        if (c.pressed) {
+                            val pan = ev.calculatePan()
+                            accX += pan.x
+                            accY += pan.y
+                            if (!draggingH && abs(accX) > slop && abs(accX) > abs(accY) * 1.2f) {
+                                draggingH = true
+                                onHorizontalScrubStart?.invoke()
+                            }
+                            if (draggingH) {
+                                onHorizontalScrub(accX, size.width)
+                                if (c.positionChanged()) c.consume()
+                            }
+                        }
+                    }
+                } while (ev.changes.any { it.pressed })
+            } finally {
+                if (draggingH) onHorizontalScrubEnd?.invoke()
+            }
         }
     }
 
@@ -316,7 +362,16 @@ private fun MediaPage(model: VaultModel, e: Item, active: Boolean, chrome: Boole
     var par by remember { mutableFloatStateOf(1f) }
     var err by remember { mutableStateOf<String?>(null) }
     var muted by remember { mutableStateOf(false) }
-    var dragging by remember { mutableStateOf<Float?>(null) }
+    var scrubbing by remember(player) { mutableStateOf(false) }
+    var screenScrub by remember(player) { mutableStateOf(false) }
+    var scrubMs by remember(player) { mutableLongStateOf(0L) }
+    var scrubStartMs by remember(player) { mutableLongStateOf(0L) }
+    var scrubDeltaMs by remember(player) { mutableLongStateOf(0L) }
+    var wasPlayingBeforeScrub by remember(player) { mutableStateOf(false) }
+    val seekCh = remember(player) { Channel<Long>(Channel.CONFLATED) }
+    var tapCueSide by remember(player) { mutableIntStateOf(0) }
+    var tapCueSec by remember(player) { mutableIntStateOf(0) }
+    var tapCueSeq by remember(player) { mutableIntStateOf(0) }
     val z = remember(e.id) { ZoomState() }
     val isVideo = e.kind == "video"
 
@@ -336,6 +391,7 @@ private fun MediaPage(model: VaultModel, e: Item, active: Boolean, chrome: Boole
         player.playWhenReady = true
         onDispose {
             playerActive = false
+            seekCh.close()
             player.removeListener(l)
             if (model.player === player) model.player = null
             try { player.release() } catch (_: Exception) {}
@@ -346,14 +402,66 @@ private fun MediaPage(model: VaultModel, e: Item, active: Boolean, chrome: Boole
     LaunchedEffect(player) {
         while (playerActive && model.player === player) {
             try {
-                pos = player.currentPosition.coerceAtLeast(0)
+                if (!scrubbing) pos = player.currentPosition.coerceAtLeast(0)
                 val d = player.duration
                 dur = if (d == C.TIME_UNSET || d < 0) 0L else d
             } catch (_: Exception) { break }
             delay(250)
         }
     }
+    LaunchedEffect(player) {
+        for (ms in seekCh) {
+            if (scrubbing && playerActive && model.player === player) {
+                try { player.seekTo(ms) } catch (_: Exception) {}
+            }
+            delay(60)
+        }
+    }
+    LaunchedEffect(tapCueSeq) {
+        if (tapCueSeq > 0) {
+            delay(750)
+            tapCueSide = 0
+            tapCueSec = 0
+        }
+    }
     LaunchedEffect(playing) { view.keepScreenOn = playing }
+
+    fun beginScrub(initialMs: Long, fromScreen: Boolean) {
+        if (!scrubbing) {
+            wasPlayingBeforeScrub = player.playWhenReady && !ended
+            scrubbing = true
+            screenScrub = fromScreen
+            scrubStartMs = initialMs
+            scrubMs = initialMs
+            scrubDeltaMs = 0L
+            if (playing) player.pause()
+            try { player.setSeekParameters(SeekParameters.CLOSEST_SYNC) } catch (_: Exception) {}
+        }
+    }
+    fun updateScrub(targetMs: Long, deltaMs: Long = 0L) {
+        val maxDur = dur.coerceAtLeast(0L)
+        val clamped = if (maxDur > 0L) targetMs.coerceIn(0L, maxDur) else targetMs.coerceAtLeast(0L)
+        scrubMs = clamped
+        scrubDeltaMs = deltaMs
+        pos = clamped
+        seekCh.trySend(clamped)
+    }
+    fun endScrub() {
+        if (!scrubbing) return
+        val maxDur = dur.coerceAtLeast(0L)
+        val finalMs = if (maxDur > 0L) scrubMs.coerceIn(0L, maxDur) else scrubMs.coerceAtLeast(0L)
+        scrubbing = false
+        screenScrub = false
+        try {
+            player.setSeekParameters(SeekParameters.EXACT)
+            player.seekTo(finalMs)
+        } catch (_: Exception) {}
+        pos = finalMs
+        if (wasPlayingBeforeScrub) {
+            try { player.play() } catch (_: Exception) {}
+        }
+    }
+
     val playPause: () -> Unit = {
         when {
             ended -> { player.seekTo(0); player.play() }
@@ -364,18 +472,40 @@ private fun MediaPage(model: VaultModel, e: Item, active: Boolean, chrome: Boole
 
     Box(Modifier.fillMaxSize()) {
         if (isVideo) {
-            Box(Modifier.fillMaxSize().zoomGestures(z, onTap, onZoom, onDoubleTap = { p, sz ->
-                if (p.x < sz.width / 2f) {
-                    val target = (player.currentPosition - 5_000).coerceAtLeast(0)
-                    player.seekTo(target)
-                    pos = target
-                } else {
-                    val curPos = player.currentPosition.coerceAtLeast(0)
-                    val target = if (dur > 0) minOf(dur, curPos + 5_000) else curPos + 5_000
-                    player.seekTo(target)
-                    pos = target
-                }
-            }), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.fillMaxSize().zoomGestures(
+                    z = z,
+                    onTap = onTap,
+                    onZoom = onZoom,
+                    onDoubleTap = { p, sz ->
+                        val left = p.x < sz.width / 2f
+                        val curPos = player.currentPosition.coerceAtLeast(0)
+                        val target = if (left) {
+                            (curPos - 5_000).coerceAtLeast(0)
+                        } else {
+                            if (dur > 0) minOf(dur, curPos + 5_000) else curPos + 5_000
+                        }
+                        player.seekTo(target)
+                        pos = target
+                        val side = if (left) -1 else 1
+                        if (tapCueSide == side) tapCueSec += 5 else { tapCueSide = side; tapCueSec = 5 }
+                        tapCueSeq++
+                    },
+                    onHorizontalScrubStart = {
+                        if (dur > 0L) beginScrub(player.currentPosition.coerceAtLeast(0L), fromScreen = true)
+                    },
+                    onHorizontalScrub = { dx, width ->
+                        if (dur > 0L && scrubbing) {
+                            val spanMs = minOf(dur, 120_000L).coerceAtLeast(1_000L).toFloat()
+                            val rawDelta = (dx / width.coerceAtLeast(1) * spanMs).toLong()
+                            val target = (scrubStartMs + rawDelta).coerceIn(0L, dur)
+                            updateScrub(target, target - scrubStartMs)
+                        }
+                    },
+                    onHorizontalScrubEnd = { endScrub() },
+                ),
+                contentAlignment = Alignment.Center,
+            ) {
                 val ar = if (vw > 0 && vh > 0) (vw * par / vh).coerceIn(0.1f, 10f) else 16f / 9f
                 AndroidView(
                     factory = { c -> TextureView(c).also { tv -> player.setVideoTextureView(tv) } },
@@ -390,8 +520,76 @@ private fun MediaPage(model: VaultModel, e: Item, active: Boolean, chrome: Boole
                 Text(e.name, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 24.dp))
             }
         }
+        // เอฟเฟกต์แตะสองครั้ง ย้อน/ข้าม 5 วินาที (ซ้าย/ขวา)
+        if (isVideo) {
+            AnimatedVisibility(
+                visible = tapCueSide < 0,
+                enter = fadeIn() + scaleIn(initialScale = 0.85f),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.CenterStart).fillMaxWidth(0.42f).fillMaxHeight(0.55f),
+            ) {
+                Box(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(topEnd = 160.dp, bottomEnd = 160.dp))
+                        .background(Color(0x66000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.FastRewind, null, tint = Color.White, modifier = Modifier.size(36.dp))
+                        Spacer(Modifier.height(4.dp))
+                        Text("-${tapCueSec} วิ", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                }
+            }
+            AnimatedVisibility(
+                visible = tapCueSide > 0,
+                enter = fadeIn() + scaleIn(initialScale = 0.85f),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxWidth(0.42f).fillMaxHeight(0.55f),
+            ) {
+                Box(
+                    Modifier.fillMaxSize().clip(RoundedCornerShape(topStart = 160.dp, bottomStart = 160.dp))
+                        .background(Color(0x66000000)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.FastForward, null, tint = Color.White, modifier = Modifier.size(36.dp))
+                        Spacer(Modifier.height(4.dp))
+                        Text("+${tapCueSec} วิ", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
+                }
+            }
+            // แถบเวลาตรงกลางขณะลากนิ้วซ้าย-ขวาบนหน้าจอ
+            AnimatedVisibility(
+                visible = screenScrub && dur > 0L,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.Center),
+            ) {
+                val deltaSec = scrubDeltaMs / 1000L
+                val sign = if (deltaSec >= 0L) "+" else "-"
+                Column(
+                    Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xB3000000))
+                        .padding(horizontal = 18.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        "${Media.fmtDuration(scrubMs / 1000.0)} / ${Media.fmtDuration(dur / 1000.0)}",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "$sign${abs(deltaSec)} วิ",
+                        color = Palette.Accent,
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+        }
         // วิดีโอจบ → ค้างไว้ที่เฟรมสุดท้าย ไม่เล่นซ้ำเอง ให้ผู้ใช้กดปุ่มวนซ้ำเอง
-        if (isVideo && ended && err == null) {
+        if (isVideo && ended && err == null && !scrubbing) {
             Box(Modifier.align(Alignment.Center).size(88.dp).clip(CircleShape).background(Color(0x99000000))
                 .clickable { player.seekTo(0); player.play() }, contentAlignment = Alignment.Center) {
                 Icon(Icons.Filled.Replay, "เล่นซ้ำ", tint = Color.White, modifier = Modifier.size(52.dp))
@@ -405,15 +603,21 @@ private fun MediaPage(model: VaultModel, e: Item, active: Boolean, chrome: Boole
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0x66000000))
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
                 .padding(horizontal = 8.dp, vertical = 4.dp)) {
-                val frac = dragging ?: if (dur > 0) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f
+                val frac = if (scrubbing && dur > 0L) (scrubMs.toFloat() / dur).coerceIn(0f, 1f)
+                           else if (dur > 0L) (pos.toFloat() / dur).coerceIn(0f, 1f) else 0f
                 Slider(
                     value = frac,
-                    onValueChange = { dragging = it },
-                    onValueChangeFinished = { dragging?.let { f -> player.seekTo((f * dur).toLong()) }; dragging = null },
+                    onValueChange = { f ->
+                        if (dur <= 0L) return@Slider
+                        val ms = (f * dur).toLong().coerceIn(0L, dur)
+                        if (!scrubbing) beginScrub(ms, fromScreen = false)
+                        updateScrub(ms)
+                    },
+                    onValueChangeFinished = { endScrub() },
                     colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Palette.Accent),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val shown = dragging?.let { (it * dur).toLong() } ?: pos
+                    val shown = if (scrubbing) scrubMs else pos
                     Text("${Media.fmtDuration(shown / 1000.0)} / ${Media.fmtDuration(dur / 1000.0)}", color = Color.White, fontSize = 12.sp)
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = { player.seekTo((pos - 10_000).coerceAtLeast(0)) }) { Icon(Icons.Filled.Replay10, "ย้อน 10 วิ", tint = Color.White) }
