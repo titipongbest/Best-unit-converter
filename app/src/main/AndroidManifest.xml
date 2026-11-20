@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ตู้อยู่ในที่เก็บข้อมูลหลัก (/storage/emulated/0/.bestspace) → ลบแอปแล้วตู้ยังอยู่
+    <!-- ตู้อยู่ในที่เก็บข้อมูลหลัก (/storage/emulated/0/.Bestunit) → ลบแอปแล้วตู้ยังอยู่
          Android 11+: "เข้าถึงไฟล์ทั้งหมด"  •  Android 8–10: อ่าน/เขียนที่เก็บข้อมูล
          ไม่ขอสิทธิ์อินเทอร์เน็ต – แอปทำงานออฟไลน์ทั้งหมด -->
     <uses-permission

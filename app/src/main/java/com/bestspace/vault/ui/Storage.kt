@@ -24,8 +24,10 @@ import java.io.OutputStream
 
 /** ที่เก็บข้อมูลหลักของเครื่อง + การแปลง Uri ของหน้าต่างเลือกไฟล์เป็นไฟล์จริง + ลบต้นฉบับแบบเขียนทับ */
 object Storage {
+    const val DEFAULT_VAULT_NAME = ".Bestunit"
+
     fun mainRoot(): File = Environment.getExternalStorageDirectory()
-    fun defaultVault(): File = File(mainRoot(), ".bestspace")
+    fun defaultVault(): File = File(mainRoot(), DEFAULT_VAULT_NAME)
 
     /** ที่วางไฟล์กุญแจ: ที่เก็บข้อมูลหลัก (ข้างตู้เริ่มต้น เหมือนแอปคอมที่วางข้างโปรแกรม) – ลบแอปแล้วยังอยู่ */
     fun keyDir(): File = mainRoot()
@@ -39,11 +41,13 @@ object Storage {
         Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
     ) else emptyList()
 
-    /** โฟลเดอร์ตู้ (มี vault.json หรือ vault.json.tmp ที่สมบูรณ์) หรือโฟลเดอร์ที่มี .bestspace อยู่ข้างใน → null = ไม่พบ */
+    /** โฟลเดอร์ตู้ (มี vault.json หรือ vault.json.tmp ที่สมบูรณ์) หรือโฟลเดอร์ที่มี .Bestunit (หรือ .bestspace) อยู่ข้างใน → null = ไม่พบ */
     fun resolveVaultDir(folder: File): File? {
         if (File(folder, "vault.json").exists() || Vault.hasValidTmpMeta(folder)) return folder
-        val inner = File(folder, ".bestspace")
-        if (File(inner, "vault.json").exists() || Vault.hasValidTmpMeta(inner)) return inner
+        for (name in listOf(DEFAULT_VAULT_NAME, ".bestspace")) {
+            val inner = File(folder, name)
+            if (File(inner, "vault.json").exists() || Vault.hasValidTmpMeta(inner)) return inner
+        }
         return null
     }
 

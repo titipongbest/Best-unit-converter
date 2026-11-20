@@ -250,7 +250,7 @@ class RealUseTest {
         main { model.create(pw.toCharArray(), true) }
         waitFor("สร้างตู้", 90_000) { model.gate == Gate.MAIN && model.busy == null && model.ask == null }
         val root = main { model.vault.root }
-        check("สร้างตู้ที่ /sdcard/.bestspace + .nomedia", root.absolutePath.endsWith("/.bestspace"))
+        check("สร้างตู้ที่ /sdcard/.Bestunit + .nomedia", root.absolutePath.endsWith("/.Bestunit"))
 
         // ---------------- 2.5) ตัวเลือกสื่อในแอป (ไม่ออกจากแอป → ย่อแอป/ปิดจอยังล็อคปกติ)
         holdPicker = true

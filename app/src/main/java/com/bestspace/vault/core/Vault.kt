@@ -55,7 +55,7 @@ object Keyfiles {
 
     fun text(secret: ByteArray): String =
         "$MAGIC\n${Crypto.b64(secret)}\n# fingerprint ${fp(secret)}\n" +
-            "# อย่าเก็บไฟล์นี้ไว้ที่เดียวกับโฟลเดอร์ .bestspace หรือไฟล์สำรองของตู้\n"
+            "# อย่าเก็บไฟล์นี้ไว้ที่เดียวกับโฟลเดอร์ .Bestunit หรือไฟล์สำรองของตู้\n"
 
     /** เขียนไฟล์กุญแจใหม่ (ไม่ทับไฟล์เดิม) */
     fun write(f: File, secret: ByteArray): File {

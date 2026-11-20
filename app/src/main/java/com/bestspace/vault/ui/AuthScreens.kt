@@ -85,7 +85,7 @@ fun PermissionScreen(requestAccess: () -> Unit) {
         Header("ต้องอนุญาตให้เข้าถึงไฟล์", "")
         Icon(Icons.Filled.SdStorage, null, tint = Palette.Muted, modifier = Modifier.size(40.dp))
         Spacer(Modifier.height(12.dp))
-        Text("BestSpace เก็บตู้ไว้ที่ที่เก็บข้อมูลหลักของเครื่อง (/.bestspace) เหมือนโปรแกรมบนคอม\n\n" +
+        Text("BestSpace เก็บตู้ไว้ที่ที่เก็บข้อมูลหลักของเครื่อง (/${Storage.DEFAULT_VAULT_NAME}) เหมือนโปรแกรมบนคอม\n\n" +
             "• ลบแอปแล้ว ตู้และไฟล์กุญแจยังอยู่ – ติดตั้งใหม่แล้วเปิดตู้เดิมได้\n" +
             "• ย้ายตู้ไปคอม/แฟลชไดรฟ์ได้ด้วยการคัดลอกโฟลเดอร์\n" +
             "• ลบไฟล์ต้นฉบับแบบเขียนทับหลังเข้ารหัสได้\n\n" +
@@ -152,7 +152,7 @@ fun SetupScreen(model: VaultModel) {
             Checkbox(useKey, { useKey = it })
             Column(Modifier.padding(top = 12.dp)) {
                 Text("🔑 ใช้ไฟล์กุญแจด้วย (แนะนำ)", color = Palette.Fg)
-                Text("สร้าง bestspace.key ไว้ที่ ${Storage.keyDir().absolutePath} – คนที่ได้ไปแค่โฟลเดอร์ .bestspace " +
+                Text("สร้าง bestspace.key ไว้ที่ ${Storage.keyDir().absolutePath} – คนที่ได้ไปแค่โฟลเดอร์ ${Storage.DEFAULT_VAULT_NAME} " +
                     "จะเดารหัสผ่านไม่ได้เลย (ต้องมีทั้งรหัสผ่าน + ไฟล์กุญแจ)", color = Palette.Muted, fontSize = 13.sp)
             }
         }

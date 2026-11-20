@@ -601,7 +601,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     // ================================================================== ตู้หลอก
     /** ตู้หลอก: ตู้จริงอีกใบในพื้นที่ส่วนตัวของแอป (แอปอื่นเข้าไม่ถึง • หายไปเมื่อถอนการติดตั้งแอป)
      *  เปิดได้จากหน้าใส่รหัสของทุกตู้ ด้วยรหัสตู้หลอก */
-    private val fakeDir get() = File(app.filesDir, "fake/.bestspace")
+    private val fakeDir get() = File(app.filesDir, "fake/${Storage.DEFAULT_VAULT_NAME}")
     fun fakeExists() = File(fakeDir, "vault.json").exists() || Vault.hasValidTmpMeta(fakeDir)
 
     private fun openFake(pw: CharArray): Vault? {
@@ -700,7 +700,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         val path = vaultDir.absolutePath
         if (shortcuts.any { it.second == path }) return@flow
         val def = if (path == Storage.defaultVault().absolutePath) "ตู้หลัก"
-            else (if (vaultDir.name == ".bestspace") vaultDir.parentFile?.name else vaultDir.name) ?: "ตู้"
+            else (if (vaultDir.name == Storage.DEFAULT_VAULT_NAME || vaultDir.name == ".bestspace") vaultDir.parentFile?.name else vaultDir.name) ?: "ตู้"
         val name = show(AskInput("บันทึกปุ่มลัด", "ชื่อปุ่ม", def,
             hint = "กดปุ่มนี้ที่หน้าใส่รหัสเพื่อสลับมาตู้นี้ (ไฟล์กุญแจที่เลือกไว้ของตู้นี้ใช้ตามไปด้วย)"))?.trim()?.take(24)
         if (name.isNullOrEmpty()) return@flow
@@ -724,7 +724,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         gate = Gate.UNLOCK
     }
 
-    /** เลือกโฟลเดอร์ .bestspace (หรือโฟลเดอร์ที่มี .bestspace อยู่ข้างใน) – ไม่พบ = ถามสร้างใหม่ที่นั่น */
+    /** เลือกโฟลเดอร์ .Bestunit (หรือโฟลเดอร์ที่มี .Bestunit / .bestspace อยู่ข้างใน) – ไม่พบ = ถามสร้างใหม่ที่นั่น */
     fun browseVault() {
         if (vault.isUnlocked) { if (busy != null) return; lockNow("ล็อคแล้ว – เลือกตู้ที่จะเปิด") }
         flow { browseFlow() }
@@ -740,7 +740,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
         var found = Storage.resolveVaultDir(folder)
         if (found == null) {
-            val target = if (folder.name == ".bestspace") folder else File(folder, ".bestspace")
+            val target = if (folder.name == Storage.DEFAULT_VAULT_NAME || folder.name == ".bestspace") folder else File(folder, Storage.DEFAULT_VAULT_NAME)
             if (target.exists() && (target.list()?.any { it != ".nomedia" } == true)) {
                 show(AskInfo("ไม่ใช่ตู้ BestSpace", "${target.path}\nมีไฟล์อื่นอยู่และไม่ใช่ตู้ BestSpace")); return
             }
@@ -876,7 +876,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     private suspend fun promptKeyBackup(key: File?, first: Boolean) {
         val msg = (if (first) "สร้างไฟล์กุญแจแล้ว:\n" else "") + "${key?.path ?: ""}\n\n" +
             "ถ้าไฟล์นี้หาย (ลบผิด / ล้างเครื่อง / มือถือเสีย) จะเปิดตู้ไม่ได้อีกเลย แม้รู้รหัสผ่าน\n\n" +
-            "สำรองไฟล์กุญแจไว้ที่อื่นตอนนี้เลยไหม? (แนะนำ: คอม/แฟลชไดรฟ์ ที่ไม่ใช่ที่เดียวกับโฟลเดอร์ .bestspace หรือไฟล์สำรองของตู้)"
+            "สำรองไฟล์กุญแจไว้ที่อื่นตอนนี้เลยไหม? (แนะนำ: คอม/แฟลชไดรฟ์ ที่ไม่ใช่ที่เดียวกับโฟลเดอร์ ${Storage.DEFAULT_VAULT_NAME} หรือไฟล์สำรองของตู้)"
         if (show(AskConfirm("สำรองไฟล์กุญแจ", msg, "สำรองเลย", "ไว้ทีหลัง"))) backupKeyfileFlow()
     }
 
@@ -891,7 +891,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             Storage.docToFile(app, uri)?.let { f ->
                 if (Dest.isPathInsideOrSame(f, vault.root)) {
                     try { android.provider.DocumentsContract.deleteDocument(app.contentResolver, uri) } catch (_: Exception) {}
-                    throw VaultException("ห้ามเก็บไฟล์กุญแจไว้ในโฟลเดอร์ .bestspace – เลือกที่อื่น")
+                    throw VaultException("ห้ามเก็บไฟล์กุญแจไว้ในโฟลเดอร์ ${Storage.DEFAULT_VAULT_NAME} – เลือกที่อื่น")
                 }
             }
             task("กำลังบันทึกไฟล์กุญแจ…") {
@@ -1024,7 +1024,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         if (vault.needsKeyfile()) return@flow
         if (!show(AskConfirm("เพิ่มไฟล์กุญแจ", "เพิ่มไฟล์กุญแจ (bestspace.key ในที่เก็บข้อมูลหลัก) ให้ตู้นี้?\n\n" +
                 "• หลังจากนี้ต้องมีทั้งรหัสผ่าน + ไฟล์กุญแจ จึงจะเปิดตู้ได้\n" +
-                "• คนที่ได้ไปแค่โฟลเดอร์ .bestspace จะเดารหัสผ่านไม่ได้\n" +
+                "• คนที่ได้ไปแค่โฟลเดอร์ ${Storage.DEFAULT_VAULT_NAME} จะเดารหัสผ่านไม่ได้\n" +
                 "• master key จะถูกเปลี่ยนใหม่ด้วย: สำเนาตู้ที่อาจหลุดไปก่อนหน้านี้ เปิดข้อมูลใหม่ไม่ได้", "เพิ่ม"))) return@flow
         checkLockout()
         val pwStr = show(AskInput("ยืนยันรหัสผ่าน", "รหัสผ่านปัจจุบัน", password = true)) ?: return@flow
@@ -2026,7 +2026,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             folderName
         } } finally { releaseTree(tree) }
         if (gen != lockGen || !vault.isUnlocked) return@flow
-        show(AskInfo("สำรองข้อมูล", "สำรองเสร็จ:\n${dest.label}/$name\n\nกู้คืน: เปลี่ยนชื่อโฟลเดอร์นี้เป็น .bestspace " +
+        show(AskInfo("สำรองข้อมูล", "สำรองเสร็จ:\n${dest.label}/$name\n\nกู้คืน: เปลี่ยนชื่อโฟลเดอร์นี้เป็น ${Storage.DEFAULT_VAULT_NAME} " +
             "แล้วกด \"เลือกตู้อื่น\" ชี้ไปที่โฟลเดอร์นั้น แล้วเปิดด้วยรหัสผ่านหลักตอนสำรอง" +
             if (vault.needsKeyfile()) "\n\n🔑 ตู้นี้ใช้ไฟล์กุญแจ: ไฟล์สำรองนี้ไม่มีกุญแจอยู่ข้างใน (ตั้งใจ) – เก็บไฟล์กุญแจสำรองไว้คนละที่" else ""))
     }
