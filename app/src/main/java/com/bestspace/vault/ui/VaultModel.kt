@@ -1201,7 +1201,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
         fun dirItem(d: String) = Item(d, dirs[d].asMap()["name"].asStr() ?: "?", true, count = st.count[d] ?: 0,
             cover = chosenCover(d) ?: st.cover[d], added = dirs[d].asMap()["created"].asDouble(),
-            pinned = dirs[d].asMap()["pinned"] == true)
+            pinned = dirs[d].asMap()["pinned"] == true, pos = (dirs[d].asMap()["pos"] as? Number)?.toDouble())
         val dirIds = if (q.isNotEmpty()) dirs.keys.filter { (dirs[it].asMap()["name"].asStr() ?: "").lowercase().contains(q) }
         else st.dirsByParent[cur] ?: emptyList()
         val pool = if (q.isNotEmpty()) ents.keys.filter { (ents[it].asMap()["name"].asStr() ?: "").lowercase().contains(q) }
@@ -1220,7 +1220,11 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
         var dItems = dirIds.map { dirItem(it) }
         sortFiles(files, mode)
-        dItems = if (mode == 1) dItems.sortedBy { it.added } else dItems.sortedBy { it.name.lowercase() }
+        dItems = when (mode) {
+            1 -> dItems.sortedBy { it.added }
+            SORT_CUSTOM -> dItems.sortedWith(compareBy<Item>({ it.pos != null }, { it.pos ?: 0.0 }, { it.name.lowercase() }))
+            else -> dItems.sortedBy { it.name.lowercase() }
+        }
         dItems = dItems.sortedByDescending { it.pinned }      // โฟลเดอร์ที่ปักหมุดอยู่บนสุด (ลำดับที่เหลือคงเดิม)
         val crumbs = listOf<Pair<String?, String>>(null to "ตู้ของฉัน") +
             vault.folderChain(cur).map { it to (dirs[it].asMap()["name"].asStr() ?: "?") }
@@ -1297,6 +1301,26 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
                     val slots = order.indices.filter { order[it] in visSet }
                     if (slots.size == vis.size) for ((k, slot) in slots.withIndex()) order[slot] = vis[k]
                     vault.setOrder(order)
+                }
+            }
+        } finally {
+            if (gen == lockGen && vault.isUnlocked) {
+                if (sort != SORT_CUSTOM) { setSortMode(SORT_CUSTOM); notice = "เปลี่ยนการเรียงเป็น \"กำหนดเอง\" แล้ว" }
+                else refresh()
+            }
+        }
+    }
+
+    /** ลากเรียงโฟลเดอร์เสร็จ: บันทึกลำดับโฟลเดอร์ในโฟลเดอร์ปัจจุบัน แล้วสลับไปโหมด "กำหนดเอง" */
+    fun reorderFolders(visible: List<String>) = flow {
+        val gen = lockGen
+        val cur = folder
+        try {
+            task("กำลังบันทึกลำดับ…") {
+                synchronized(vault) {
+                    val ds = vault.folders()
+                    val order = visible.filter { d -> d in ds && vault.parentOf(d) == cur }
+                    vault.setFolderOrder(order)
                 }
             }
         } finally {

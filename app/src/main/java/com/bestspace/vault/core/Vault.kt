@@ -901,6 +901,14 @@ class Vault(val root: File, val keyDir: File?) {
         saveIndex()
     }
 
+    /** บันทึกลำดับโฟลเดอร์แบบกำหนดเองในดัชนีที่เข้ารหัส */
+    @Synchronized fun setFolderOrder(order: List<String>) {
+        need()
+        val ds = folders()
+        for ((i, did) in order.withIndex()) (ds[did] as? MutableMap<String, Any?>)?.set("pos", i.toDouble())
+        saveIndex()
+    }
+
     /** ภาพปกโฟลเดอร์ที่เลือกเอง (null = อัตโนมัติ: รูป/วิดีโอล่าสุดข้างใน) */
     @Synchronized fun setFolderCover(did: String, fid: String?) {
         val f = folders()[did] as? MutableMap<String, Any?> ?: throw VaultException("ไม่พบโฟลเดอร์")

@@ -168,7 +168,10 @@ fun GalleryScreen(model: VaultModel) {
         val target = itemAt(center)?.takeIf { it.key != k } ?: return
         val from = shown.indexOfFirst { it.id == k }
         val to = shown.indexOfFirst { it.id == target.key }
-        if (from < 0 || to < 0 || shown[to].isDir) return            // โฟลเดอร์อยู่ด้านบนเสมอ – ลากไฟล์ไปแทนที่ไม่ได้
+        if (from < 0 || to < 0) return
+        val src = shown[from]; val dst = shown[to]
+        if (src.isDir != dst.isDir) return                            // โฟลเดอร์อยู่ด้านบนเสมอ – ไม่สลับข้ามกลุ่มกับไฟล์
+        if (src.isDir && src.pinned != dst.pinned) return             // โฟลเดอร์ปักหมุดสลับกันเอง / ไม่ปักหมุดสลับกันเอง
         val first = g.firstVisibleItemIndex
         val firstOff = g.firstVisibleItemScrollOffset
         shown.add(to, shown.removeAt(from))
@@ -176,8 +179,13 @@ fun GalleryScreen(model: VaultModel) {
     }
     fun finish(commit: Boolean) {
         val k = pressKey
-        if (dragKey != null) {
-            if (commit) { frozen = curL; model.reorder(shown.filter { !it.isDir }.map { it.id }) }
+        val dk = dragKey
+        if (dk != null) {
+            if (commit) {
+                frozen = curL
+                if (Vault.isDir(dk)) model.reorderFolders(shown.filter { it.isDir }.map { it.id })
+                else model.reorder(shown.filter { !it.isDir }.map { it.id })
+            }
         } else if (commit && k != null && k !in sel) sel.add(k)        // กดค้างแล้วปล่อย = เลือก (เหมือนเดิม)
         pressSelected = false
         pressKey = null; dragKey = null; dragDelta = Offset.Zero; autoScroll = 0f
@@ -277,7 +285,7 @@ fun GalleryScreen(model: VaultModel) {
                                         dragDelta += amount
                                         if (dragKey == null && dragDelta.getDistance() > viewConfiguration.touchSlop && canReorder) {
                                             val now = if (frozen === curL) shown.toList() else curL.items
-                                            if (now.firstOrNull { it.id == k }?.isDir == false) {
+                                            if (now.any { it.id == k }) {
                                                 shown.clear(); shown.addAll(now); dragKey = k
                                                 // กลายเป็นการลากจัดลำดับ → ยกเลิกการเลือกที่เพิ่งเพิ่มตอนกดค้าง (เหมือนเดิม)
                                                 if (pressSelected) { sel.remove(k); pressSelected = false }
