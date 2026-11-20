@@ -119,13 +119,28 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bestspace.vault.core.Mime
 import com.bestspace.vault.core.Vault
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 
 @Composable
 fun GalleryScreen(model: VaultModel) {
     val l = model.listing
     val sel = model.selected
-    val grid = rememberLazyGridState()
+    val selSet by remember { derivedStateOf { sel.toHashSet() } }
+    // จำ LazyGridState แยกตามโฟลเดอร์ (ในหน่วยความจำเท่านั้น) → กดย้อนกลับแล้วอยู่ตำแหน่งเดิมทันทีตั้งแต่เฟรมแรก ไม่กระพริบ
+    val gridStates = remember { HashMap<String?, LazyGridState>() }
+    val listFolder = l.crumbs.lastOrNull()?.first
+    val stateKey = if (l.searching) "__search__" else listFolder
+    val grid = remember(stateKey) {
+        if (stateKey == "__search__") LazyGridState()
+        else gridStates.getOrPut(stateKey) { LazyGridState() }
+    }
+    LaunchedEffect(listFolder, l.searching) {
+        if (!l.searching) {
+            val keep = l.crumbs.map { it.first }.toSet()
+            gridStates.keys.retainAll(keep)
+        }
+    }
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
 
@@ -139,23 +154,25 @@ fun GalleryScreen(model: VaultModel) {
     var dragDelta by remember { mutableStateOf(Offset.Zero) }
     var autoScroll by remember { mutableFloatStateOf(0f) }
     val curL by rememberUpdatedState(l)
+    val curGrid by rememberUpdatedState(grid)
     val canReorder by rememberUpdatedState(!l.searching && model.busy == null)
     val items: List<Item> = if (dragKey != null || frozen === l) shown else l.items
-    fun itemAt(p: Offset) = grid.layoutInfo.visibleItemsInfo.firstOrNull { inf ->
+    fun itemAt(p: Offset) = curGrid.layoutInfo.visibleItemsInfo.firstOrNull { inf ->
         p.x >= inf.offset.x && p.x < inf.offset.x + inf.size.width && p.y >= inf.offset.y && p.y < inf.offset.y + inf.size.height
     }
     fun moveIfNeeded() {
+        val g = curGrid
         val k = dragKey ?: return
-        val inf = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == k } ?: return
+        val inf = g.layoutInfo.visibleItemsInfo.firstOrNull { it.key == k } ?: return
         val center = dragStart + dragDelta + Offset(inf.size.width / 2f, inf.size.height / 2f)
         val target = itemAt(center)?.takeIf { it.key != k } ?: return
         val from = shown.indexOfFirst { it.id == k }
         val to = shown.indexOfFirst { it.id == target.key }
         if (from < 0 || to < 0 || shown[to].isDir) return            // โฟลเดอร์อยู่ด้านบนเสมอ – ลากไฟล์ไปแทนที่ไม่ได้
-        val first = grid.firstVisibleItemIndex
-        val firstOff = grid.firstVisibleItemScrollOffset
+        val first = g.firstVisibleItemIndex
+        val firstOff = g.firstVisibleItemScrollOffset
         shown.add(to, shown.removeAt(from))
-        if (from == first || to == first) scope.launch { grid.scrollToItem(first, firstOff) }
+        if (from == first || to == first) scope.launch { g.scrollToItem(first, firstOff) }
     }
     fun finish(commit: Boolean) {
         val k = pressKey
@@ -165,7 +182,7 @@ fun GalleryScreen(model: VaultModel) {
         pressSelected = false
         pressKey = null; dragKey = null; dragDelta = Offset.Zero; autoScroll = 0f
     }
-    LaunchedEffect(dragKey) {                                     // ลากไปชิดขอบบน/ล่าง = เลื่อนรายการตาม
+    LaunchedEffect(dragKey, grid) {                                     // ลากไปชิดขอบบน/ล่าง = เลื่อนรายการตาม
         while (dragKey != null) {
             if (autoScroll != 0f) { grid.scrollBy(autoScroll); moveIfNeeded() }
             delay(16)
@@ -175,19 +192,6 @@ fun GalleryScreen(model: VaultModel) {
     LaunchedEffect(model.query) {
         if (model.query == lastQuery) return@LaunchedEffect
         delay(250); lastQuery = model.query; model.refresh()
-    }
-    // จำตำแหน่งเลื่อนของแต่ละโฟลเดอร์ (ในหน่วยความจำเท่านั้น) → กดย้อนกลับแล้วอยู่ที่เดิม, เข้าโฟลเดอร์ใหม่ = เริ่มบนสุด
-    val scrollMemo = remember { HashMap<String?, Pair<Int, Int>>() }
-    val listFolder = l.crumbs.lastOrNull()?.first
-    var prevFolder by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(listFolder, l.searching) {
-        if (l.searching) { try { grid.scrollToItem(0) } catch (_: Exception) {}; return@LaunchedEffect }
-        if (listFolder != prevFolder && prevFolder in l.crumbs.map { it.first }) scrollMemo.remove(listFolder)  // ลงไปโฟลเดอร์ย่อย
-        prevFolder = listFolder
-        val p = scrollMemo[listFolder]
-        try { grid.scrollToItem(p?.first ?: 0, p?.second ?: 0) } catch (_: Exception) {}
-        snapshotFlow { grid.firstVisibleItemIndex to grid.firstVisibleItemScrollOffset }
-            .collect { scrollMemo[listFolder] = it }
     }
     BackHandler(enabled = model.busy == null && model.viewer == null && (sel.isNotEmpty() || model.folder != null || model.searchOpen)) {
         when {
@@ -251,7 +255,7 @@ fun GalleryScreen(model: VaultModel) {
                         columns = GridCells.Fixed(model.columns),
                         state = grid,
                         userScrollEnabled = pressKey == null,
-                        modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                        modifier = Modifier.fillMaxSize().pointerInput(grid) {
                             detectDragGesturesAfterLongPress(
                                 onDragStart = { off ->
                                     val inf = itemAt(off)
@@ -299,8 +303,12 @@ fun GalleryScreen(model: VaultModel) {
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(items, key = { it.id }) { item ->
-                            val isSel = item.id in sel
+                        items(
+                            items = items,
+                            key = { it.id },
+                            contentType = { if (it.isDir) 0 else if (it.media) 1 else if (it.text) 2 else 3 },
+                        ) { item ->
+                            val isSel = item.id in selSet
                             val dragging = item.id == dragKey
                             Box(
                                 if (dragging) Modifier.zIndex(1f).graphicsLayer {
@@ -314,6 +322,7 @@ fun GalleryScreen(model: VaultModel) {
                                 else Modifier
                             ) {
                                 Tile(model, item, isSel,
+                                    isScrolling = { grid.isScrollInProgress },
                                     onClick = {
                                         when {
                                             pressKey != null -> {}               // ปล่อยนิ้วหลังกดค้าง – จัดการใน finish()
@@ -479,10 +488,18 @@ fun iconFor(item: Item): ImageVector = when {
 }
 
 @Composable
-private fun Tile(model: VaultModel, item: Item, selected: Boolean, onClick: () -> Unit) {
+private fun Tile(
+    model: VaultModel,
+    item: Item,
+    selected: Boolean,
+    isScrolling: () -> Boolean = { false },
+    onClick: () -> Unit,
+) {
     val thumbId = if (item.isDir) item.cover else if (item.media) item.id else null
     val thumb by produceState(initialValue = thumbId?.let { model.thumbCached(it) }, thumbId, model.thumbEpoch) {
-        value = thumbId?.let { model.thumb(it) }
+        if (value != null || thumbId == null) return@produceState
+        if (isScrolling()) delay(45)
+        value = model.thumb(thumbId)
     }
     Column(Modifier.combinedClickable(onClick = onClick)) {
         Box(
@@ -500,7 +517,11 @@ private fun Tile(model: VaultModel, item: Item, selected: Boolean, onClick: () -
                         .background(Color(0xAA000000), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
             } else if (t == null && item.text) {
                 // ไฟล์ข้อความ: แสดงข้อความต้นไฟล์เท่าที่ช่องพอใส่ (ถอดรหัสในหน่วยความจำเท่านั้น)
-                val snip by produceState(initialValue = model.snippetCached(item.id), item.id) { value = model.snippet(item.id) }
+                val snip by produceState(initialValue = model.snippetCached(item.id), item.id) {
+                    if (value != null) return@produceState
+                    if (isScrolling()) delay(45)
+                    value = model.snippet(item.id)
+                }
                 val s = snip
                 if (s.isNullOrBlank()) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(iconFor(item), null, tint = Palette.Muted, modifier = Modifier.size(36.dp))
@@ -593,11 +614,11 @@ fun GridFastScrollbar(
     bottomInset: Dp = 12.dp,
 ) {
     if (!enabled || totalItems <= 0) return
-    val canScroll by remember { derivedStateOf { state.canScrollForward || state.canScrollBackward } }
+    val canScroll by remember(state) { derivedStateOf { state.canScrollForward || state.canScrollBackward } }
     if (!canScroll) return
     val density = LocalDensity.current
     val spacingPx = with(density) { spacingDp.toPx() }
-    val scrollFrac by remember(totalItems, columns, spacingPx) {
+    val scrollFrac by remember(state, totalItems, columns, spacingPx) {
         derivedStateOf {
             val info = state.layoutInfo
             val vis = info.visibleItemsInfo
@@ -615,7 +636,7 @@ fun GridFastScrollbar(
             (curPx / (totalPx - viewportPx)).coerceIn(0f, 1f)
         }
     }
-    val scope = rememberCoroutineScope()
+    val curState by rememberUpdatedState(state)
     val curTotal by rememberUpdatedState(totalItems)
     val curCols by rememberUpdatedState(columns)
     FastScrollbarTrack(
@@ -624,10 +645,11 @@ fun GridFastScrollbar(
         modifier = modifier,
         bottomInset = bottomInset,
         onScrub = { frac ->
+            val st = curState
             val count = curTotal
             val cols = curCols.coerceAtLeast(1)
             if (count <= 0) return@FastScrollbarTrack
-            val info = state.layoutInfo
+            val info = st.layoutInfo
             val vis = info.visibleItemsInfo
             val totalRows = (count + cols - 1) / cols
             val rowPx = (vis.maxOfOrNull { it.size.height }?.toFloat() ?: 120f) + spacingPx
@@ -637,7 +659,7 @@ fun GridFastScrollbar(
             val targetRow = (targetPx / rowPx).toInt().coerceIn(0, (totalRows - 1).coerceAtLeast(0))
             val targetIdx = (targetRow * cols).coerceIn(0, (count - 1).coerceAtLeast(0))
             val rowOff = (targetPx - targetRow * rowPx).toInt().coerceAtLeast(0)
-            scope.launch { state.scrollToItem(targetIdx, rowOff) }
+            st.scrollToItem(targetIdx, rowOff)
         },
     )
 }
@@ -651,9 +673,9 @@ fun ListFastScrollbar(
     bottomInset: Dp = 12.dp,
 ) {
     if (!enabled || totalItems <= 0) return
-    val canScroll by remember { derivedStateOf { state.canScrollForward || state.canScrollBackward } }
+    val canScroll by remember(state) { derivedStateOf { state.canScrollForward || state.canScrollBackward } }
     if (!canScroll) return
-    val scrollFrac by remember(totalItems) {
+    val scrollFrac by remember(state, totalItems) {
         derivedStateOf {
             val info = state.layoutInfo
             val vis = info.visibleItemsInfo
@@ -668,7 +690,7 @@ fun ListFastScrollbar(
             (curPx / (totalPx - viewportPx)).coerceIn(0f, 1f)
         }
     }
-    val scope = rememberCoroutineScope()
+    val curState by rememberUpdatedState(state)
     val curTotal by rememberUpdatedState(totalItems)
     FastScrollbarTrack(
         scrollFraction = scrollFrac,
@@ -676,9 +698,10 @@ fun ListFastScrollbar(
         modifier = modifier,
         bottomInset = bottomInset,
         onScrub = { frac ->
+            val st = curState
             val count = curTotal
             if (count <= 0) return@FastScrollbarTrack
-            val info = state.layoutInfo
+            val info = st.layoutInfo
             val vis = info.visibleItemsInfo
             val avgPx = if (vis.isNotEmpty()) vis.map { it.size }.average().toFloat().coerceAtLeast(1f) else 120f
             val viewportPx = (info.viewportEndOffset - info.viewportStartOffset).toFloat().coerceAtLeast(1f)
@@ -686,7 +709,7 @@ fun ListFastScrollbar(
             val targetPx = frac * maxScroll
             val targetIdx = (targetPx / avgPx).toInt().coerceIn(0, (count - 1).coerceAtLeast(0))
             val off = (targetPx - targetIdx * avgPx).toInt().coerceAtLeast(0)
-            scope.launch { state.scrollToItem(targetIdx, off) }
+            st.scrollToItem(targetIdx, off)
         },
     )
 }
@@ -697,7 +720,7 @@ private fun FastScrollbarTrack(
     isScrolling: Boolean,
     modifier: Modifier = Modifier,
     bottomInset: Dp = 12.dp,
-    onScrub: (Float) -> Unit,
+    onScrub: suspend (Float) -> Unit,
 ) {
     var dragging by remember { mutableStateOf(false) }
     var dragFrac by remember { mutableFloatStateOf(0f) }
@@ -707,6 +730,11 @@ private fun FastScrollbarTrack(
     val thumbHeightDp = 42.dp
     val thumbHeightPx = with(density) { thumbHeightDp.toPx() }
     val curOnScrub by rememberUpdatedState(onScrub)
+    val scrubChannel = remember { Channel<Float>(Channel.CONFLATED) }
+
+    LaunchedEffect(Unit) {
+        for (f in scrubChannel) curOnScrub(f)
+    }
 
     LaunchedEffect(isScrolling, dragging) {
         if (isScrolling || dragging) {
@@ -743,7 +771,7 @@ private fun FastScrollbarTrack(
         val usable = (trackHeightPx - thumbHeightPx).coerceAtLeast(1f)
         val f = ((yPx - thumbHeightPx / 2f) / usable).coerceIn(0f, 1f)
         dragFrac = f
-        curOnScrub(f)
+        scrubChannel.trySend(f)
     }
 
     Box(

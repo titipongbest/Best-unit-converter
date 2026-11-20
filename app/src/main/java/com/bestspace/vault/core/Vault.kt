@@ -365,6 +365,8 @@ class Vault(val root: File, val keyDir: File?) {
     var genStore: GenStore? = null
     @Volatile var rollback: Pair<Long, Long>? = null
         private set
+    @Volatile var indexRevision: Long = 0L
+        private set
 
     val isUnlocked get() = master != null
     fun exists() = metaFile.exists() || hasValidTmpMeta(root)
@@ -527,6 +529,7 @@ class Vault(val root: File, val keyDir: File?) {
         master = null
         index = null
         diskSig = null
+        indexRevision++
     }
 
     /** เปลี่ยนรหัส + หมุน master key ใหม่ (สำเนา vault.json เก่า + รหัสเก่า เปิดตู้ปัจจุบันไม่ได้อีก) */
@@ -670,6 +673,7 @@ class Vault(val root: File, val keyDir: File?) {
         }
         if (index!!["folders"] == null) index!!["folders"] = linkedMapOf<String, Any?>()
         if (index!!["files"] == null) index!!["files"] = linkedMapOf<String, Any?>()
+        indexRevision++
         noteGen(true)
         migrateKeys()
     }
@@ -691,7 +695,7 @@ class Vault(val root: File, val keyDir: File?) {
             try { openIndex(cur) } catch (_: BadKeyTag) { throw RemoteRekey() }
         }
         val (merged, gained) = mergeIndex(index!!, other)
-        index = merged; diskSig = sig(cur); externalMerges++
+        index = merged; diskSig = sig(cur); externalMerges++; indexRevision++
         return gained
     }
 
@@ -704,6 +708,7 @@ class Vault(val root: File, val keyDir: File?) {
         val data = sealIndex(idx, m)
         atomicWrite(indexFile, data)
         diskSig = sig(data)
+        indexRevision++
         noteGen(false)
     }
 

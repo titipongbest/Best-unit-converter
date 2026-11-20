@@ -229,22 +229,24 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     fun track(b: Bitmap) { liveBitmaps.add(java.lang.ref.WeakReference(b)) }
     /** ภาพย่อที่ถอดไว้ (LRU) – จำกัดตามขนาดหน่วยความจำจริง (เดิมจำกัด 500 ภาพ ≈ 270 MB → ตู้ใหญ่เลื่อนดูแล้วแอปแครช) */
     private val thumbs = LinkedHashMap<String, Thumb>(256, 0.75f, true)
+    private val thumbRead = ConcurrentHashMap<String, Thumb>()
     private var thumbBytes = 0L
     private val thumbBudget = minOf(Runtime.getRuntime().maxMemory() / 6, 96L shl 20)
     private fun thumbSize(t: Thumb) = try { t.bitmap.allocationByteCount.toLong() } catch (_: Exception) { 0L }
     private fun putThumb(fid: String, t: Thumb) = synchronized(thumbs) {
         thumbs.put(fid, t)?.let { thumbBytes -= thumbSize(it) }
+        thumbRead[fid] = t
         thumbBytes += thumbSize(t)
         val iter = thumbs.entries.iterator()
         while (thumbBytes > thumbBudget && thumbs.size > 1 && iter.hasNext()) {
             val e = iter.next()
             if (e.key == fid) continue
-            thumbBytes -= thumbSize(e.value); iter.remove()      // ไม่ทับพิกเซล – อาจยังแสดงอยู่บนจอ (ทับให้ตอนล็อคไม่ได้แล้ว แต่ GC เก็บ)
+            thumbBytes -= thumbSize(e.value); thumbRead.remove(e.key); iter.remove()      // ไม่ทับพิกเซล – อาจยังแสดงอยู่บนจอ (ทับให้ตอนล็อคไม่ได้แล้ว แต่ GC เก็บ)
         }
     }
     private fun clearThumbs(): List<Bitmap> = synchronized(thumbs) {
-        synchronized(snippets) { snippets.clear() }
-        val old = thumbs.values.map { it.bitmap }; thumbs.clear(); thumbBytes = 0; old
+        synchronized(snippets) { snippets.clear(); snippetRead.clear() }
+        val old = thumbs.values.map { it.bitmap }; thumbs.clear(); thumbRead.clear(); thumbBytes = 0; old
     }
     private fun dropThumbsForScrypt() {
         val had = clearThumbs().isNotEmpty()
@@ -270,8 +272,13 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
     /** ข้อความต้นไฟล์ .txt ที่แสดงในช่องแกลเลอรี – ถอดรหัสแค่ส่วนต้นในหน่วยความจำ ไม่เก็บลงดิสก์ ล้างตอนล็อค */
+    private val snippetRead = ConcurrentHashMap<String, String>()
     private val snippets = object : LinkedHashMap<String, String>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > 300
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+            val drop = size > 300
+            if (drop && eldest != null) snippetRead.remove(eldest.key)
+            return drop
+        }
     }
 
     val openDir get() = File(app.cacheDir, "open")
@@ -513,6 +520,8 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             oldVault.lock()
         }
         clearClipboard(false)
+        refreshJob?.cancel(); refreshJob = null
+        statsCache = null
         viewer = null; fullscreen = false
         selected.clear(); folder = null; query = ""; searchOpen = false
         sort = 0; columns = 3
@@ -1094,16 +1103,88 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     // ================================================================== รายการในแกลเลอรี
+    private class VaultStats(
+        val vault: Vault,
+        val rev: Long,
+        val count: Map<String, Int>,
+        val cover: Map<String, String>,
+        val totalBytes: Long,
+        val filesByParent: Map<String?, List<String>>,
+        val dirsByParent: Map<String?, List<String>>,
+    )
+    @Volatile private var statsCache: VaultStats? = null
+    private var refreshJob: Job? = null
+
+    private fun getStatsLocked(v: Vault): VaultStats {
+        val rev = v.indexRevision
+        statsCache?.let { if (it.vault === v && it.rev == rev) return it }
+        val ents = v.files(); val dirs = v.folders()
+        val count = HashMap<String, Int>()
+        val coverBest = HashMap<String, Pair<String, Double>>()
+        val filesByParent = HashMap<String?, ArrayList<String>>()
+        val dirsByParent = HashMap<String?, ArrayList<String>>()
+        var total = 0L
+        for (d in dirs.keys) {
+            dirsByParent.getOrPut(v.parentOf(d)) { ArrayList() }.add(d)
+        }
+        for ((fid, ev) in ents) {
+            val e = ev.asMap()
+            total += e["size"].asLong()
+            val parent = v.parentOf(fid)
+            filesByParent.getOrPut(parent) { ArrayList() }.add(fid)
+            val media = Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") in setOf("image", "video")
+            val added = e["added"].asDouble()
+            for (d in v.folderChain(parent)) {
+                count[d] = (count[d] ?: 0) + 1
+                if (media && added > (coverBest[d]?.second ?: -1.0)) coverBest[d] = fid to added
+            }
+        }
+        val cover = HashMap<String, String>(coverBest.size)
+        for ((d, p) in coverBest) cover[d] = p.first
+        return VaultStats(v, rev, count, cover, total, filesByParent, dirsByParent).also { statsCache = it }
+    }
+
     fun refresh() {
         if (!vault.isUnlocked) return
+        val gen = lockGen
         val f = folder; val q = query.trim().lowercase(); val flt = filter; val s = sort
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             val l = withContext(Dispatchers.Default) { try { computeListing(f, q, flt, s) } catch (e: Exception) { null } }
-            if (l != null && vault.isUnlocked) {
+            if (gen == lockGen && l != null && vault.isUnlocked) {
                 listing = l
                 selected.retainAll(l.items.map { it.id }.toSet())
+                version++
             }
-            version++
+        }
+    }
+
+    private fun navigateTo(target: String?, clearSearch: Boolean) {
+        if (!vault.isUnlocked) return
+        val gen = lockGen
+        val flt = filter
+        val q = if (clearSearch) "" else query.trim().lowercase()
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
+            val result = withContext(Dispatchers.Default) {
+                try {
+                    val (s, c) = synchronized(vault) { vault.folderView(target) }
+                    val sc = s.coerceIn(0, SORTS.lastIndex)
+                    val cc = c.coerceIn(2, 6)
+                    val l = computeListing(target, q, flt, sc)
+                    Triple(sc, cc, l)
+                } catch (_: Exception) { null }
+            }
+            if (gen == lockGen && result != null && vault.isUnlocked) {
+                val (sc, cc, l) = result
+                folder = target
+                sort = sc
+                columns = cc
+                selected.clear()
+                if (clearSearch) { query = ""; searchOpen = false }
+                listing = l
+                version++
+            }
         }
     }
 
@@ -1111,32 +1192,22 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         if (!vault.isUnlocked) return Listing()
         val ents = vault.files(); val dirs = vault.folders()
         val cur = if (cur0 != null && dirs.containsKey(cur0)) cur0 else null
-        // สถิติโฟลเดอร์: จำนวนไฟล์ (รวมโฟลเดอร์ย่อย) + ภาพปก = รูป/วิดีโอล่าสุดข้างใน
-        val count = HashMap<String, Int>(); val cover = HashMap<String, Pair<String, Double>>()
-        for ((fid, ev) in ents) {
-            val e = ev.asMap()
-            val media = Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") in setOf("image", "video")
-            val added = e["added"].asDouble()
-            for (d in vault.folderChain(vault.parentOf(fid))) {
-                count[d] = (count[d] ?: 0) + 1
-                if (media && added > (cover[d]?.second ?: -1.0)) cover[d] = fid to added
-            }
-        }
+        val st = getStatsLocked(vault)
         fun chosenCover(d: String): String? {                 // ภาพปกที่ผู้ใช้เลือกไว้ – ยังอยู่ในโฟลเดอร์นี้และเป็นรูป/วิดีโอ
             val c = dirs[d].asMap()["cover"].asStr() ?: return null
             val e = ents[c]?.asMap() ?: return null
             if (Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") !in setOf("image", "video")) return null
             return if (d in vault.folderChain(vault.parentOf(c))) c else null
         }
-        fun dirItem(d: String) = Item(d, dirs[d].asMap()["name"].asStr() ?: "?", true, count = count[d] ?: 0,
-            cover = chosenCover(d) ?: cover[d]?.first, added = dirs[d].asMap()["created"].asDouble(),
+        fun dirItem(d: String) = Item(d, dirs[d].asMap()["name"].asStr() ?: "?", true, count = st.count[d] ?: 0,
+            cover = chosenCover(d) ?: st.cover[d], added = dirs[d].asMap()["created"].asDouble(),
             pinned = dirs[d].asMap()["pinned"] == true)
         val dirIds = if (q.isNotEmpty()) dirs.keys.filter { (dirs[it].asMap()["name"].asStr() ?: "").lowercase().contains(q) }
-        else dirs.keys.filter { vault.parentOf(it) == cur }
+        else st.dirsByParent[cur] ?: emptyList()
         val pool = if (q.isNotEmpty()) ents.keys.filter { (ents[it].asMap()["name"].asStr() ?: "").lowercase().contains(q) }
-        else ents.keys.filter { vault.parentOf(it) == cur }
+        else st.filesByParent[cur] ?: emptyList()
         val counts = HashMap<String, Int>().apply { KINDS.forEach { put(it.first, 0) } }
-        val files = ArrayList<Item>()
+        val files = ArrayList<Item>(pool.size)
         for (fid in pool) {
             val e = ents[fid].asMap()
             val name = e["name"].asStr() ?: "file"
@@ -1153,8 +1224,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         dItems = dItems.sortedByDescending { it.pinned }      // โฟลเดอร์ที่ปักหมุดอยู่บนสุด (ลำดับที่เหลือคงเดิม)
         val crumbs = listOf<Pair<String?, String>>(null to "ตู้ของฉัน") +
             vault.folderChain(cur).map { it to (dirs[it].asMap()["name"].asStr() ?: "?") }
-        val total = ents.values.sumOf { it.asMap()["size"].asLong() }
-        return Listing(dItems + files, counts, ents.size, dirs.size, total, crumbs, q.isNotEmpty())
+        return Listing(dItems + files, counts, ents.size, dirs.size, st.totalBytes, crumbs, q.isNotEmpty())
     }
 
     private val viewSaveMutex = Mutex()
@@ -1181,12 +1251,12 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun openFolder(d: String?) { folder = d; selected.clear(); query = ""; searchOpen = false; syncFolderView(); refresh() }
+    fun openFolder(d: String?) { navigateTo(d, clearSearch = true) }
 
     fun up(): Boolean {
         val f = folder ?: return false
-        folder = synchronized(vault) { if (vault.isUnlocked) vault.parentOf(f) else null }
-        selected.clear(); syncFolderView(); refresh()
+        val parent = synchronized(vault) { if (vault.isUnlocked) vault.parentOf(f) else null }
+        navigateTo(parent, clearSearch = false)
         return true
     }
 
@@ -1314,9 +1384,9 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun thumbCached(fid: String): Thumb? = synchronized(thumbs) { thumbs[fid] }
+    fun thumbCached(fid: String): Thumb? = thumbRead[fid]
 
-    fun snippetCached(fid: String): String? = synchronized(snippets) { snippets[fid] }
+    fun snippetCached(fid: String): String? = snippetRead[fid]
 
     /** อ่านแค่ 1 KB แรกของไฟล์ข้อความ แล้วแปลงเป็นตัวอักษร (เข้ารหัสแบบเดียวกับหน้าแก้ไขข้อความ) */
     private fun readSnippet(fid: String): String? {
@@ -1350,12 +1420,17 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
                 if (gen != lockGen || !vault.isUnlocked) return@withContext null
                 val text = readSnippet(fid) ?: return@withContext null
                 if (gen != lockGen) return@withContext null
-                synchronized(snippets) { snippets[fid] = text }
+                synchronized(snippets) { snippets[fid] = text; snippetRead[fid] = text }
                 text
             }
         }
     }
-    private fun dropThumb(fid: String) { synchronized(thumbs) { thumbs.remove(fid)?.let { thumbBytes -= thumbSize(it) } } }
+    private fun dropThumb(fid: String) {
+        synchronized(thumbs) {
+            thumbRead.remove(fid)
+            thumbs.remove(fid)?.let { thumbBytes -= thumbSize(it) }
+        }
+    }
 
     fun entryOf(fid: String): Item? = synchronized(vault) {
         if (!vault.isUnlocked) return null
