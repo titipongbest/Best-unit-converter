@@ -3,23 +3,38 @@
 package com.bestspace.vault.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.gestures.scrollBy
-import kotlinx.coroutines.launch
-import androidx.compose.ui.zIndex
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material.icons.filled.Wallpaper
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -231,83 +246,94 @@ fun GalleryScreen(model: VaultModel) {
                         color = Palette.Muted, textAlign = TextAlign.Center)
                 }
             } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(model.columns),
-                    state = grid,
-                    userScrollEnabled = pressKey == null,
-                    modifier = Modifier.fillMaxSize().pointerInput(Unit) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { off ->
-                                val inf = itemAt(off)
-                                if (inf != null) {
-                                    pressKey = inf.key as? String
-                                    dragStart = Offset(inf.offset.x.toFloat(), inf.offset.y.toFloat())
-                                    dragDelta = Offset.Zero
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    // เลือกทันทีที่เครื่องสั่น ไม่ต้องรอปล่อยนิ้ว
+                Box(Modifier.fillMaxSize()) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(model.columns),
+                        state = grid,
+                        userScrollEnabled = pressKey == null,
+                        modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = { off ->
+                                    val inf = itemAt(off)
+                                    if (inf != null) {
+                                        pressKey = inf.key as? String
+                                        dragStart = Offset(inf.offset.x.toFloat(), inf.offset.y.toFloat())
+                                        dragDelta = Offset.Zero
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        // เลือกทันทีที่เครื่องสั่น ไม่ต้องรอปล่อยนิ้ว
+                                        val k = pressKey
+                                        pressSelected = k != null && k !in sel
+                                        if (k != null && pressSelected) sel.add(k)
+                                    }
+                                },
+                                onDrag = { change, amount ->
                                     val k = pressKey
-                                    pressSelected = k != null && k !in sel
-                                    if (k != null && pressSelected) sel.add(k)
-                                }
-                            },
-                            onDrag = { change, amount ->
-                                val k = pressKey
-                                if (k != null) {
-                                    change.consume()
-                                    dragDelta += amount
-                                    if (dragKey == null && dragDelta.getDistance() > viewConfiguration.touchSlop && canReorder) {
-                                        val now = if (frozen === curL) shown.toList() else curL.items
-                                        if (now.firstOrNull { it.id == k }?.isDir == false) {
-                                            shown.clear(); shown.addAll(now); dragKey = k
-                                            // กลายเป็นการลากจัดลำดับ → ยกเลิกการเลือกที่เพิ่งเพิ่มตอนกดค้าง (เหมือนเดิม)
-                                            if (pressSelected) { sel.remove(k); pressSelected = false }
+                                    if (k != null) {
+                                        change.consume()
+                                        dragDelta += amount
+                                        if (dragKey == null && dragDelta.getDistance() > viewConfiguration.touchSlop && canReorder) {
+                                            val now = if (frozen === curL) shown.toList() else curL.items
+                                            if (now.firstOrNull { it.id == k }?.isDir == false) {
+                                                shown.clear(); shown.addAll(now); dragKey = k
+                                                // กลายเป็นการลากจัดลำดับ → ยกเลิกการเลือกที่เพิ่งเพิ่มตอนกดค้าง (เหมือนเดิม)
+                                                if (pressSelected) { sel.remove(k); pressSelected = false }
+                                            }
+                                        }
+                                        if (dragKey != null) {
+                                            moveIfNeeded()
+                                            val y = change.position.y
+                                            val edge = 72.dp.toPx()
+                                            autoScroll = when {
+                                                y < edge -> -((edge - y) / edge).coerceIn(0f, 1f) * 28f
+                                                y > size.height - edge -> ((y - (size.height - edge)) / edge).coerceIn(0f, 1f) * 28f
+                                                else -> 0f
+                                            }
                                         }
                                     }
-                                    if (dragKey != null) {
-                                        moveIfNeeded()
-                                        val y = change.position.y
-                                        val edge = 72.dp.toPx()
-                                        autoScroll = when {
-                                            y < edge -> -((edge - y) / edge).coerceIn(0f, 1f) * 28f
-                                            y > size.height - edge -> ((y - (size.height - edge)) / edge).coerceIn(0f, 1f) * 28f
-                                            else -> 0f
+                                },
+                                onDragEnd = { finish(true) },
+                                onDragCancel = { finish(false) },
+                            )
+                        },
+                        contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 96.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(items, key = { it.id }) { item ->
+                            val isSel = item.id in sel
+                            val dragging = item.id == dragKey
+                            Box(
+                                if (dragging) Modifier.zIndex(1f).graphicsLayer {
+                                    val inf = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == item.id }
+                                    if (inf != null) {
+                                        translationX = dragStart.x + dragDelta.x - inf.offset.x
+                                        translationY = dragStart.y + dragDelta.y - inf.offset.y
+                                    }
+                                    scaleX = 1.08f; scaleY = 1.08f; alpha = 0.92f
+                                } else if (dragKey != null) Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
+                                else Modifier
+                            ) {
+                                Tile(model, item, isSel,
+                                    onClick = {
+                                        when {
+                                            pressKey != null -> {}               // ปล่อยนิ้วหลังกดค้าง – จัดการใน finish()
+                                            sel.isNotEmpty() -> if (isSel) sel.remove(item.id) else sel.add(item.id)
+                                            item.isDir -> model.openFolder(item.id)
+                                            else -> model.openViewer(item.id)
                                         }
-                                    }
-                                }
-                            },
-                            onDragEnd = { finish(true) },
-                            onDragCancel = { finish(false) },
-                        )
-                    },
-                    contentPadding = PaddingValues(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 96.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(items, key = { it.id }) { item ->
-                        val isSel = item.id in sel
-                        val dragging = item.id == dragKey
-                        Box(
-                            if (dragging) Modifier.zIndex(1f).graphicsLayer {
-                                val inf = grid.layoutInfo.visibleItemsInfo.firstOrNull { it.key == item.id }
-                                if (inf != null) {
-                                    translationX = dragStart.x + dragDelta.x - inf.offset.x
-                                    translationY = dragStart.y + dragDelta.y - inf.offset.y
-                                }
-                                scaleX = 1.08f; scaleY = 1.08f; alpha = 0.92f
-                            } else if (dragKey != null) Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
-                            else Modifier
-                        ) {
-                            Tile(model, item, isSel,
-                                onClick = {
-                                    when {
-                                        pressKey != null -> {}               // ปล่อยนิ้วหลังกดค้าง – จัดการใน finish()
-                                        sel.isNotEmpty() -> if (isSel) sel.remove(item.id) else sel.add(item.id)
-                                        item.isDir -> model.openFolder(item.id)
-                                        else -> model.openViewer(item.id)
-                                    }
-                                })
+                                    })
+                            }
                         }
                     }
+                    GridFastScrollbar(
+                        state = grid,
+                        totalItems = items.size,
+                        columns = model.columns,
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                        enabled = dragKey == null && pressKey == null,
+                        spacingDp = 8.dp,
+                        bottomInset = if (sel.isEmpty()) 88.dp else 12.dp,
+                    )
                 }
             }
         }
@@ -554,4 +580,204 @@ fun CoverPickerDialog(model: VaultModel, a: AskCover) {
         confirmButton = { TextButton(onClick = { a.result.complete("") }) { Text("อัตโนมัติ (ล่าสุด)") } },
         dismissButton = { TextButton(onClick = { a.result.complete(null) }) { Text("ยกเลิก") } },
     )
+}
+
+@Composable
+fun GridFastScrollbar(
+    state: LazyGridState,
+    totalItems: Int,
+    columns: Int,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    spacingDp: Dp = 8.dp,
+    bottomInset: Dp = 12.dp,
+) {
+    if (!enabled || totalItems <= 0) return
+    val canScroll by remember { derivedStateOf { state.canScrollForward || state.canScrollBackward } }
+    if (!canScroll) return
+    val density = LocalDensity.current
+    val spacingPx = with(density) { spacingDp.toPx() }
+    val scrollFrac by remember(totalItems, columns, spacingPx) {
+        derivedStateOf {
+            val info = state.layoutInfo
+            val vis = info.visibleItemsInfo
+            if (vis.isEmpty() || totalItems <= 0) return@derivedStateOf 0f
+            if (!state.canScrollBackward) return@derivedStateOf 0f
+            if (!state.canScrollForward) return@derivedStateOf 1f
+            val first = vis.first()
+            val cols = columns.coerceAtLeast(1)
+            val totalRows = (totalItems + cols - 1) / cols
+            val firstRow = first.index / cols
+            val rowPx = (vis.maxOfOrNull { it.size.height }?.toFloat() ?: 1f) + spacingPx
+            val viewportPx = (info.viewportEndOffset - info.viewportStartOffset).toFloat().coerceAtLeast(1f)
+            val totalPx = (totalRows * rowPx + info.afterContentPadding).coerceAtLeast(viewportPx + 1f)
+            val curPx = (firstRow * rowPx - first.offset.y + info.beforeContentPadding).coerceAtLeast(0f)
+            (curPx / (totalPx - viewportPx)).coerceIn(0f, 1f)
+        }
+    }
+    val scope = rememberCoroutineScope()
+    val curTotal by rememberUpdatedState(totalItems)
+    val curCols by rememberUpdatedState(columns)
+    FastScrollbarTrack(
+        scrollFraction = scrollFrac,
+        isScrolling = state.isScrollInProgress,
+        modifier = modifier,
+        bottomInset = bottomInset,
+        onScrub = { frac ->
+            val count = curTotal
+            val cols = curCols.coerceAtLeast(1)
+            if (count <= 0) return@FastScrollbarTrack
+            val info = state.layoutInfo
+            val vis = info.visibleItemsInfo
+            val totalRows = (count + cols - 1) / cols
+            val rowPx = (vis.maxOfOrNull { it.size.height }?.toFloat() ?: 120f) + spacingPx
+            val viewportPx = (info.viewportEndOffset - info.viewportStartOffset).toFloat().coerceAtLeast(1f)
+            val maxScroll = (totalRows * rowPx + info.afterContentPadding - viewportPx).coerceAtLeast(0f)
+            val targetPx = frac * maxScroll
+            val targetRow = (targetPx / rowPx).toInt().coerceIn(0, (totalRows - 1).coerceAtLeast(0))
+            val targetIdx = (targetRow * cols).coerceIn(0, (count - 1).coerceAtLeast(0))
+            val rowOff = (targetPx - targetRow * rowPx).toInt().coerceAtLeast(0)
+            scope.launch { state.scrollToItem(targetIdx, rowOff) }
+        },
+    )
+}
+
+@Composable
+fun ListFastScrollbar(
+    state: LazyListState,
+    totalItems: Int,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    bottomInset: Dp = 12.dp,
+) {
+    if (!enabled || totalItems <= 0) return
+    val canScroll by remember { derivedStateOf { state.canScrollForward || state.canScrollBackward } }
+    if (!canScroll) return
+    val scrollFrac by remember(totalItems) {
+        derivedStateOf {
+            val info = state.layoutInfo
+            val vis = info.visibleItemsInfo
+            if (vis.isEmpty() || totalItems <= 0) return@derivedStateOf 0f
+            if (!state.canScrollBackward) return@derivedStateOf 0f
+            if (!state.canScrollForward) return@derivedStateOf 1f
+            val first = vis.first()
+            val avgPx = vis.map { it.size }.average().toFloat().coerceAtLeast(1f)
+            val viewportPx = (info.viewportEndOffset - info.viewportStartOffset).toFloat().coerceAtLeast(1f)
+            val totalPx = (totalItems * avgPx + info.afterContentPadding).coerceAtLeast(viewportPx + 1f)
+            val curPx = (first.index * avgPx - first.offset + info.beforeContentPadding).coerceAtLeast(0f)
+            (curPx / (totalPx - viewportPx)).coerceIn(0f, 1f)
+        }
+    }
+    val scope = rememberCoroutineScope()
+    val curTotal by rememberUpdatedState(totalItems)
+    FastScrollbarTrack(
+        scrollFraction = scrollFrac,
+        isScrolling = state.isScrollInProgress,
+        modifier = modifier,
+        bottomInset = bottomInset,
+        onScrub = { frac ->
+            val count = curTotal
+            if (count <= 0) return@FastScrollbarTrack
+            val info = state.layoutInfo
+            val vis = info.visibleItemsInfo
+            val avgPx = if (vis.isNotEmpty()) vis.map { it.size }.average().toFloat().coerceAtLeast(1f) else 120f
+            val viewportPx = (info.viewportEndOffset - info.viewportStartOffset).toFloat().coerceAtLeast(1f)
+            val maxScroll = (count * avgPx + info.afterContentPadding - viewportPx).coerceAtLeast(0f)
+            val targetPx = frac * maxScroll
+            val targetIdx = (targetPx / avgPx).toInt().coerceIn(0, (count - 1).coerceAtLeast(0))
+            val off = (targetPx - targetIdx * avgPx).toInt().coerceAtLeast(0)
+            scope.launch { state.scrollToItem(targetIdx, off) }
+        },
+    )
+}
+
+@Composable
+private fun FastScrollbarTrack(
+    scrollFraction: Float,
+    isScrolling: Boolean,
+    modifier: Modifier = Modifier,
+    bottomInset: Dp = 12.dp,
+    onScrub: (Float) -> Unit,
+) {
+    var dragging by remember { mutableStateOf(false) }
+    var dragFrac by remember { mutableFloatStateOf(0f) }
+    var active by remember { mutableStateOf(false) }
+    var trackHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val thumbHeightDp = 42.dp
+    val thumbHeightPx = with(density) { thumbHeightDp.toPx() }
+    val curOnScrub by rememberUpdatedState(onScrub)
+
+    LaunchedEffect(isScrolling, dragging) {
+        if (isScrolling || dragging) {
+            active = true
+        } else {
+            delay(1000)
+            active = false
+        }
+    }
+
+    val thumbAlpha by animateFloatAsState(
+        targetValue = when {
+            dragging -> 1f
+            active -> 0.72f
+            else -> 0.28f
+        },
+        animationSpec = tween(durationMillis = if (active || dragging) 120 else 300),
+        label = "sbAlpha",
+    )
+    val thumbWidth by animateDpAsState(
+        targetValue = when {
+            dragging -> 7.dp
+            active -> 5.dp
+            else -> 3.5.dp
+        },
+        animationSpec = tween(120),
+        label = "sbWidth",
+    )
+
+    val frac = if (dragging) dragFrac else scrollFraction
+
+    fun scrubAt(yPx: Float) {
+        if (trackHeightPx <= 0) return
+        val usable = (trackHeightPx - thumbHeightPx).coerceAtLeast(1f)
+        val f = ((yPx - thumbHeightPx / 2f) / usable).coerceIn(0f, 1f)
+        dragFrac = f
+        curOnScrub(f)
+    }
+
+    Box(
+        modifier
+            .fillMaxHeight()
+            .padding(top = 6.dp, bottom = bottomInset, end = 2.dp)
+            .width(20.dp)
+            .onSizeChanged { trackHeightPx = it.height }
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragStart = { off ->
+                        dragging = true
+                        scrubAt(off.y)
+                    },
+                    onVerticalDrag = { change, _ ->
+                        change.consume()
+                        scrubAt(change.position.y)
+                    },
+                    onDragEnd = { dragging = false },
+                    onDragCancel = { dragging = false },
+                )
+            },
+    ) {
+        val usable = (trackHeightPx - thumbHeightPx).coerceAtLeast(0f)
+        val thumbY = (frac * usable).toInt()
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .offset { IntOffset(0, thumbY) }
+                .width(thumbWidth)
+                .height(thumbHeightDp)
+                .alpha(thumbAlpha)
+                .clip(RoundedCornerShape(4.dp))
+                .background(if (dragging) Palette.Accent else Color.White)
+        )
+    }
 }

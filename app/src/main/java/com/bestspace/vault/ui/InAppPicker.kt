@@ -40,9 +40,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -489,6 +491,9 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
     var menuOpen by remember { mutableStateOf(false) }
     var refreshEpoch by remember { mutableIntStateOf(0) }
     var previewCandidate by remember { mutableStateOf<PickerCandidate?>(null) }
+    val mediaGridState = rememberLazyGridState()
+    val dirListState = rememberLazyListState()
+    LaunchedEffect(currentDir) { try { dirListState.scrollToItem(0) } catch (_: Exception) {} }
 
     // รายการที่เลือก (รักษาลำดับการแตะ)
     val pickedOrder = remember { mutableStateListOf<String>() }
@@ -886,30 +891,41 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
                         }
                     }
                 } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(gridCols),
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        items(filteredMedia, key = { it.key }) { item ->
-                            val selIdx = pickedOrder.indexOf(item.key)
-                            val uri = remember(item.key) { item.uri }
-                            val cand = PickerCandidate(item.key, item.name, item.size, item.mime, null, uri, item.isVideo, item.durationMs, item.path)
-                            MediaGridTile(
-                                ctx = ctx,
-                                store = thumbStore,
-                                key = item.key,
-                                uri = uri,
-                                path = item.path,
-                                isVideo = item.isVideo,
-                                durationMs = item.durationMs,
-                                selectedNumber = if (selIdx >= 0) selIdx + 1 else null,
-                                onToggle = { togglePick(cand) },
-                                onPreview = { previewCandidate = cand },
-                            )
+                    Box(Modifier.fillMaxSize()) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(gridCols),
+                            state = mediaGridState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            items(filteredMedia, key = { it.key }) { item ->
+                                val selIdx = pickedOrder.indexOf(item.key)
+                                val uri = remember(item.key) { item.uri }
+                                val cand = PickerCandidate(item.key, item.name, item.size, item.mime, null, uri, item.isVideo, item.durationMs, item.path)
+                                MediaGridTile(
+                                    ctx = ctx,
+                                    store = thumbStore,
+                                    key = item.key,
+                                    uri = uri,
+                                    path = item.path,
+                                    isVideo = item.isVideo,
+                                    durationMs = item.durationMs,
+                                    selectedNumber = if (selIdx >= 0) selIdx + 1 else null,
+                                    onToggle = { togglePick(cand) },
+                                    onPreview = { previewCandidate = cand },
+                                )
+                            }
                         }
+                        GridFastScrollbar(
+                            state = mediaGridState,
+                            totalItems = filteredMedia.size,
+                            columns = gridCols,
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                            spacingDp = 3.dp,
+                            bottomInset = 8.dp,
+                        )
                     }
                 }
             } else {
@@ -927,7 +943,8 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
                         CircularProgressIndicator()
                     }
                 } else {
-                    LazyColumn(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize()) {
+                        LazyColumn(state = dirListState, modifier = Modifier.fillMaxSize()) {
                         if (canGoUp) {
                             item(key = "__up__") {
                                 Row(
@@ -1060,6 +1077,13 @@ fun InAppPickerScreen(model: VaultModel, a: AskInAppPick) {
                                 }
                             }
                         }
+                        }
+                        ListFastScrollbar(
+                            state = dirListState,
+                            totalItems = dirFiles.size + (if (canGoUp) 1 else 0),
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                            bottomInset = 8.dp,
+                        )
                     }
                 }
             }
