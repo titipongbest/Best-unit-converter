@@ -91,60 +91,15 @@ object DecoyConverter {
     const val REVEAL_UNIT_CODE = "kg"
     const val REVEAL_VALUE = 45.0
 
-    data class HistoryItem(
-        val id: Long,
-        val catId: String,
-        val fromIdx: Int,
-        val toIdx: Int,
-        val input: String,
-        val output: String,
-        val fromSymbol: String,
-        val toSymbol: String,
-    )
-
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("unit_converter", Context.MODE_PRIVATE)
 
-    fun loadHistory(ctx: Context): List<HistoryItem> = try {
-        val a = JSONArray(prefs(ctx).getString("history", "[]"))
-        List(a.length()) { i ->
-            val o = a.getJSONObject(i)
-            HistoryItem(
-                id = o.getLong("id"),
-                catId = o.getString("c"),
-                fromIdx = o.getInt("fi"),
-                toIdx = o.getInt("ti"),
-                input = o.getString("in"),
-                output = o.getString("out"),
-                fromSymbol = o.getString("fs"),
-                toSymbol = o.getString("ts"),
-            )
-        }
-    } catch (_: Exception) { emptyList() }
-
-    fun saveHistory(ctx: Context, items: List<HistoryItem>) {
-        val a = JSONArray()
-        items.take(30).forEach {
-            a.put(
-                JSONObject()
-                    .put("id", it.id)
-                    .put("c", it.catId)
-                    .put("fi", it.fromIdx)
-                    .put("ti", it.toIdx)
-                    .put("in", it.input)
-                    .put("out", it.output)
-                    .put("fs", it.fromSymbol)
-                    .put("ts", it.toSymbol)
-            )
-        }
-        prefs(ctx).edit().putString("history", a.toString()).commit()
-    }
-
-    fun clearHistory(ctx: Context) {
-        prefs(ctx).edit().remove("history").commit()
+    fun clearAll(ctx: Context) {
+        prefs(ctx).edit().clear().commit()
     }
 
     fun loadLastState(ctx: Context): Triple<Int, Int, Int> {
         val p = prefs(ctx)
+        if (p.contains("history")) p.edit().remove("history").apply()
         val cat = p.getInt("cat", 0).coerceIn(0, UnitConverterEngine.categories.lastIndex)
         val units = UnitConverterEngine.categories[cat].units
         val f = p.getInt("from", UnitConverterEngine.categories[cat].defaultFrom).coerceIn(0, units.lastIndex)
@@ -365,10 +320,8 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
     var fromIdx by remember { mutableIntStateOf(initial.second) }
     var toIdx by remember { mutableIntStateOf(initial.third) }
     var inputRaw by remember { mutableStateOf("1") }
-    var showHistory by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var copiedBanner by remember { mutableStateOf(false) }
-    val history = remember { mutableStateListOf<DecoyConverter.HistoryItem>().apply { addAll(DecoyConverter.loadHistory(ctx)) } }
     val locked = remember(settings) { NotesLockStore.isSet(ctx) }
     val hold by rememberUpdatedState(onHold)
 
@@ -404,32 +357,6 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
         persistState(catIdx, toIdx, fromIdx)
     }
 
-    fun recordCurrent() {
-        val v = inputRaw.toDoubleOrNull() ?: return
-        val inDisp = UnitConverterEngine.formatInputDisplay(inputRaw)
-        val outDisp = UnitConverterEngine.formatValue(UnitConverterEngine.convert(v, fromUnit, toUnit))
-        val entry = DecoyConverter.HistoryItem(
-            id = System.currentTimeMillis(),
-            catId = category.id,
-            fromIdx = fromIdx,
-            toIdx = toIdx,
-            input = inputRaw,
-            output = outDisp,
-            fromSymbol = fromUnit.symbol,
-            toSymbol = toUnit.symbol,
-        )
-        if (history.firstOrNull()?.let {
-                it.catId == entry.catId && it.fromIdx == entry.fromIdx && it.toIdx == entry.toIdx && it.input == entry.input
-            } != true
-        ) {
-            history.add(0, entry)
-            while (history.size > 30) history.removeAt(history.lastIndex)
-            DecoyConverter.saveHistory(ctx, history.toList())
-        }
-        // อัปเดตแสดงข้อความบันทึกแล้วสั้นๆ เผื่อกด =
-        if (inDisp.isNotEmpty()) copiedBanner = false
-    }
-
     fun onKey(k: String) {
         when (k) {
             "C" -> inputRaw = "0"
@@ -459,7 +386,7 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
                     inputRaw = "0"
                     hold()
                 } else {
-                    recordCurrent()
+                    copiedBanner = false
                 }
             }
             else -> {
@@ -483,9 +410,6 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("Unit Converter", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = NoteColors.Fg)
                 Text("ตัวแปลงหน่วย • ${category.title}", fontSize = 12.sp, color = NoteColors.Muted)
-            }
-            IconButton(onClick = { showHistory = true }) {
-                Icon(Icons.Filled.History, "ประวัติการแปลง", tint = NoteColors.Muted)
             }
             if (locked) {
                 IconButton(onClick = onLockNow) {
@@ -654,69 +578,6 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
                 }
             }
         }
-    }
-
-    if (showHistory) {
-        AlertDialog(
-            onDismissRequest = { showHistory = false },
-            title = {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("ประวัติการแปลง", Modifier.weight(1f))
-                    if (history.isNotEmpty()) {
-                        IconButton(onClick = {
-                            history.clear()
-                            DecoyConverter.clearHistory(ctx)
-                        }) {
-                            Icon(Icons.Filled.DeleteSweep, "ล้างประวัติ", tint = NoteColors.Muted)
-                        }
-                    }
-                }
-            },
-            text = {
-                if (history.isEmpty()) {
-                    Text("ยังไม่มีประวัติ\nกดปุ่ม = เพื่อบันทึกการแปลงที่ใช้งานบ่อย", color = NoteColors.Muted, fontSize = 14.sp)
-                } else {
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
-                        items(history, key = { it.id }) { h ->
-                            Row(
-                                Modifier.fillMaxWidth()
-                                    .clickable {
-                                        val ci = UnitConverterEngine.categories.indexOfFirst { it.id == h.catId }
-                                        if (ci >= 0) {
-                                            val maxU = UnitConverterEngine.categories[ci].units.lastIndex
-                                            persistState(ci, h.fromIdx.coerceIn(0, maxU), h.toIdx.coerceIn(0, maxU))
-                                            inputRaw = h.input
-                                        }
-                                        showHistory = false
-                                    }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        "${UnitConverterEngine.formatInputDisplay(h.input)} ${h.fromSymbol}  →  ${h.output} ${h.toSymbol}",
-                                        fontWeight = FontWeight.Medium,
-                                        color = NoteColors.Fg,
-                                        fontSize = 14.sp,
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        history.removeAll { it.id == h.id }
-                                        DecoyConverter.saveHistory(ctx, history.toList())
-                                    },
-                                    modifier = Modifier.size(28.dp),
-                                ) {
-                                    Icon(Icons.Filled.Close, "ลบ", tint = NoteColors.Muted, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                            HorizontalDivider(color = NoteColors.KeyBg)
-                        }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showHistory = false }) { Text("ปิด") } },
-        )
     }
 }
 

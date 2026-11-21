@@ -272,14 +272,14 @@ fun NotesLockScreen(onUnlocked: () -> Unit) {
         AlertDialog(
             onDismissRequest = { forgot = false },
             title = { Text("ลืมรหัส") },
-            text = { Text("รีเซ็ตได้ด้วยการล้างประวัติการแปลงทั้งหมดในแอปนี้แล้วเอารหัสออก") },
+            text = { Text("รีเซ็ตค่าตัวแปลงหน่วยและเอารหัสล็อคแอปออก") },
             confirmButton = {
                 TextButton(onClick = {
                     forgot = false
-                    DecoyConverter.clearHistory(ctx)
+                    DecoyConverter.clearAll(ctx)
                     NotesLockStore.clear(ctx)
                     onUnlocked()
-                }) { Text("ล้างประวัติและรีเซ็ต", color = NoteColors.Danger) }
+                }) { Text("รีเซ็ต", color = NoteColors.Danger) }
             },
             dismissButton = { TextButton(onClick = { forgot = false }) { Text("ยกเลิก") } },
         )
