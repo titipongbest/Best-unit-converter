@@ -505,7 +505,9 @@ private fun Tile(
 ) {
     val thumbId = if (item.isDir) item.cover else if (item.media) item.id else null
     val thumb by produceState(initialValue = thumbId?.let { model.thumbCached(it) }, thumbId, model.thumbEpoch) {
-        if (value != null || thumbId == null) return@produceState
+        if (thumbId == null) { value = null; return@produceState }
+        val cached = model.thumbCached(thumbId)
+        if (cached != null) { value = cached; return@produceState }
         if (isScrolling()) delay(45)
         value = model.thumb(thumbId)
     }
@@ -567,7 +569,7 @@ private fun Tile(
 }
 
 
-/** เลือกภาพปกโฟลเดอร์จากรูป/วิดีโอข้างใน (ภาพย่อถอดรหัสในหน่วยความจำเหมือนแกลเลอรี) */
+/** เลือกภาพปกโฟลเดอร์จากรูป/วิดีโอ/ปกโฟลเดอร์ย่อยชั้นเดียว (ภาพย่อถอดรหัสในหน่วยความจำเหมือนแกลเลอรี) */
 @Composable
 fun CoverPickerDialog(model: VaultModel, a: AskCover) {
     AlertDialog(
@@ -575,7 +577,7 @@ fun CoverPickerDialog(model: VaultModel, a: AskCover) {
         title = { Text("ภาพปกโฟลเดอร์ “${a.folderName}”", maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
             Column {
-                Text("แตะรูปหรือวิดีโอที่จะใช้เป็นภาพปก (วิดีโอใช้ภาพปกของคลิปนั้น)", color = Palette.Muted, fontSize = 13.sp)
+                Text("แตะรูป ปกวิดีโอ หรือปกโฟลเดอร์ย่อยในหน้านี้เพื่อใช้เป็นภาพปก", color = Palette.Muted, fontSize = 13.sp)
                 Spacer(Modifier.height(8.dp))
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -596,7 +598,10 @@ fun CoverPickerDialog(model: VaultModel, a: AskCover) {
                             val t = thumb
                             if (t != null) Image(t.image, item.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                             else Icon(iconFor(item), null, tint = Palette.Muted, modifier = Modifier.align(Alignment.Center).size(28.dp))
-                            if (item.kind == "video") Icon(Icons.Filled.PlayArrow, null, tint = Color.White,
+                            if (item.isDir) Icon(Icons.Filled.Folder, null, tint = Palette.Folder,
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(3.dp).size(18.dp)
+                                    .background(Color(0xAA000000), RoundedCornerShape(3.dp)).padding(1.dp))
+                            else if (item.kind == "video") Icon(Icons.Filled.PlayArrow, null, tint = Color.White,
                                 modifier = Modifier.align(Alignment.BottomEnd).padding(3.dp).size(16.dp)
                                     .background(Color(0xAA000000), RoundedCornerShape(3.dp)))
                             if (cur) Icon(Icons.Filled.CheckCircle, null, tint = Palette.Accent,

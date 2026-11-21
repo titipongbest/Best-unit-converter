@@ -1331,24 +1331,43 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** ปุ่มภาพปกในโฟลเดอร์: เลือกจากรูป/วิดีโอในโฟลเดอร์นี้ (รวมโฟลเดอร์ย่อย) */
+    /** ปุ่มภาพปกในโฟลเดอร์: เลือกจากรูป/วิดีโอ/ปกโฟลเดอร์ย่อยในชั้นนี้ชั้นเดียว (ไม่ดึงไฟล์ลึกกว่านั้น) */
     fun pickFolderCover() = flow {
         val d = folder ?: return@flow
         val (name, cands, cur) = synchronized(vault) {
             val dirs = vault.folders(); val ents = vault.files()
-            val out = ArrayList<Item>()
-            for ((fid, ev) in ents) {
-                val e = ev.asMap()
+            val st = getStatsLocked(vault)
+            fun chosenCover(dirId: String): String? {
+                val c = dirs[dirId].asMap()["cover"].asStr() ?: return null
+                val e = ents[c]?.asMap() ?: return null
+                if (Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") !in setOf("image", "video")) return null
+                return if (dirId in vault.folderChain(vault.parentOf(c))) c else null
+            }
+            var dirCands = (st.dirsByParent[d] ?: emptyList()).mapNotNull { sub ->
+                val cov = chosenCover(sub) ?: st.cover[sub] ?: return@mapNotNull null
+                val dm = dirs[sub].asMap()
+                Item(cov, dm["name"].asStr() ?: "?", true,
+                    added = dm["created"].asDouble(),
+                    pinned = dm["pinned"] == true,
+                    pos = (dm["pos"] as? Number)?.toDouble())
+            }
+            dirCands = when (sort) {
+                1 -> dirCands.sortedBy { it.added }
+                SORT_CUSTOM -> dirCands.sortedWith(compareBy<Item>({ it.pos != null }, { it.pos ?: 0.0 }, { it.name.lowercase() }))
+                else -> dirCands.sortedBy { it.name.lowercase() }
+            }.sortedByDescending { it.pinned }
+            val fileCands = ArrayList<Item>()
+            for (fid in (st.filesByParent[d] ?: emptyList())) {
+                val e = ents[fid].asMap()
                 val n = e["name"].asStr() ?: "file"; val mime = e["mime"].asStr() ?: ""
                 val k = Mime.kind(n, mime)
                 if (k != "image" && k != "video") continue
-                if (d !in vault.folderChain(vault.parentOf(fid))) continue
-                out.add(Item(fid, n, false, k, mime, e["size"].asLong(), e["added"].asDouble(), pos = (e["pos"] as? Number)?.toDouble()))
+                fileCands.add(Item(fid, n, false, k, mime, e["size"].asLong(), e["added"].asDouble(), pos = (e["pos"] as? Number)?.toDouble()))
             }
-            sortFiles(out, sort)
-            Triple(dirs[d].asMap()["name"].asStr() ?: "โฟลเดอร์", out.take(600), dirs[d].asMap()["cover"].asStr())
+            sortFiles(fileCands, sort)
+            Triple(dirs[d].asMap()["name"].asStr() ?: "โฟลเดอร์", (dirCands + fileCands).take(600), dirs[d].asMap()["cover"].asStr())
         }
-        if (cands.isEmpty()) { show(AskInfo("ภาพปกโฟลเดอร์", "โฟลเดอร์นี้ยังไม่มีรูปหรือวิดีโอ")); return@flow }
+        if (cands.isEmpty()) { show(AskInfo("ภาพปกโฟลเดอร์", "โฟลเดอร์นี้ยังไม่มีรูป วิดีโอ หรือโฟลเดอร์ย่อยที่มีภาพปก")); return@flow }
         val r = show(AskCover(name, cands, cur)) ?: return@flow
         task("กำลังบันทึกภาพปก…") { vault.setFolderCover(d, r.ifEmpty { null }) }
         refresh()
