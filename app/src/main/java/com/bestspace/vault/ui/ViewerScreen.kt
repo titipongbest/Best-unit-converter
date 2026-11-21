@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -681,7 +682,7 @@ private fun TextPage(model: VaultModel, key: String, fid: String, active: Boolea
     LaunchedEffect(active, session) { if (active && session != null) model.textSession = session }
     DisposableEffect(session) { onDispose { if (session != null && model.textSession === session) model.textSession = null } }
 
-    Column(Modifier.fillMaxSize().padding(top = 56.dp)) {
+    Column(Modifier.fillMaxSize().imePadding().padding(top = 56.dp)) {
         when {
             d != null && session != null -> {
                 Text(

@@ -308,6 +308,72 @@ fun IncognitoField(
     }
 }
 
+/** ช่องค้นหาแบบกะทัดรัดสำหรับวางใน TopAppBar (ความสูงเท่าแถบเดิม ไม่ดันกริดลง และคีย์บอร์ดไม่จำคำค้น) */
+@Composable
+fun CompactSearchField(
+    value: String,
+    onChange: (String) -> Unit,
+    hint: String,
+    modifier: Modifier = Modifier,
+    onDone: (() -> Unit)? = null,
+) {
+    val change by rememberUpdatedState(onChange)
+    val done by rememberUpdatedState(onDone)
+    var ref by remember { mutableStateOf<SecureEditText?>(null) }
+    DisposableEffect(Unit) {
+        onDispose {
+            ref?.let { et ->
+                (et.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.hideSoftInputFromWindow(et.windowToken, 0)
+                wipeEditable(et.text)
+            }
+            ref = null
+        }
+    }
+    AndroidView(
+        modifier = modifier.fillMaxWidth(),
+        factory = { ctx ->
+            SecureEditText(ctx).apply {
+                ref = this
+                background = null
+                setPadding(0, 0, 0, 0)
+                setTextColor(Palette.FgInt)
+                setHintTextColor(Palette.MutedInt)
+                setHint(hint)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                isSingleLine = true
+                imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_ACTION_SEARCH or
+                    EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                setText(value)
+                setSelection(text.length)
+                addTextChangedListener(object : TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                    override fun afterTextChanged(s: Editable?) { change(s?.toString() ?: "") }
+                })
+                setOnEditorActionListener { _, action, _ ->
+                    if ((action == EditorInfo.IME_ACTION_SEARCH || action == EditorInfo.IME_ACTION_DONE) && done != null) {
+                        done?.invoke(); true
+                    } else false
+                }
+                post {
+                    if (isAttachedToWindow) {
+                        requestFocus()
+                        (ctx.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                            ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+                    }
+                }
+            }
+        },
+        update = { et ->
+            ref = et
+            if (et.text.toString() != value) { et.setText(value); et.setSelection(et.text.length) }
+        },
+    )
+}
+
 private fun typeFor(password: Boolean, show: Boolean): Int = when {
     password && show -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
     password -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD

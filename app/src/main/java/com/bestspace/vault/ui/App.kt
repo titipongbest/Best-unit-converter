@@ -19,9 +19,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.displayCutoutPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -111,16 +113,18 @@ fun App(model: VaultModel, requestAccess: () -> Unit) {
         model.viewer != null -> Palette.ViewBg
         else -> Palette.Bg
     })) {
-        Box(if (model.fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().safeDrawingPadding()) {
-            if (decoyShown) NotesTheme {
-                // ตั้งรหัสล็อคโน้ตไว้ → ต้องใส่รหัสก่อนเห็นหน้าโน้ต (ล็อคใหม่ทุกครั้งที่ออกจากแอป/ปิดจอ)
-                if (!model.notesOpen && NotesLockStore.isSet(LocalContext.current)) NotesLockScreen { model.notesOpen = true }
-                else DecoyScreen(model::revealVault, onLockNow = { model.notesOpen = false })
+        Box(if (model.fullscreen) Modifier.fillMaxSize() else Modifier.fillMaxSize().systemBarsPadding().displayCutoutPadding()) {
+            if (decoyShown) Box(Modifier.fillMaxSize().imePadding()) {
+                NotesTheme {
+                    // ตั้งรหัสล็อคโน้ตไว้ → ต้องใส่รหัสก่อนเห็นหน้าโน้ต (ล็อคใหม่ทุกครั้งที่ออกจากแอป/ปิดจอ)
+                    if (!model.notesOpen && NotesLockStore.isSet(LocalContext.current)) NotesLockScreen { model.notesOpen = true }
+                    else DecoyScreen(model::revealVault, onLockNow = { model.notesOpen = false })
+                }
             }
             else when (model.gate) {
                 Gate.PERMISSION -> PermissionScreen(requestAccess)
-                Gate.SETUP -> SetupScreen(model)
-                Gate.UNLOCK -> UnlockScreen(model)
+                Gate.SETUP -> Box(Modifier.fillMaxSize().imePadding()) { SetupScreen(model) }
+                Gate.UNLOCK -> Box(Modifier.fillMaxSize().imePadding()) { UnlockScreen(model) }
                 Gate.MAIN -> {
                     GalleryScreen(model)
                     model.viewer?.let { ViewerScreen(model, it) }

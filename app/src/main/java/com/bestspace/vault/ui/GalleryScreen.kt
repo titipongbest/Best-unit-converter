@@ -196,10 +196,9 @@ fun GalleryScreen(model: VaultModel) {
             delay(16)
         }
     }
-    BackHandler(enabled = model.busy == null && model.viewer == null && (sel.isNotEmpty() || model.folder != null || model.searchOpen)) {
+    BackHandler(enabled = model.busy == null && model.viewer == null && (sel.isNotEmpty() || model.folder != null)) {
         when {
             sel.isNotEmpty() -> sel.clear()
-            model.searchOpen -> { model.searchOpen = false; model.setSearchQuery("") }
             else -> model.up()
         }
     }
@@ -211,9 +210,8 @@ fun GalleryScreen(model: VaultModel) {
         floatingActionButton = { if (sel.isEmpty()) AddFab(model) },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
-            SearchBar(model)
             if (l.searching) {
-                Text("🔍 ผลการค้นหาทั้งตู้: “${model.query.trim()}”", color = Palette.Muted, fontSize = 13.sp,
+                Text("🔍 ผลการค้นหาทั้งตู้: “${l.searchQuery}”", color = Palette.Muted, fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
             } else if (model.folder != null) {
                 LazyRow(Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 6.dp)) {
@@ -350,29 +348,43 @@ fun GalleryScreen(model: VaultModel) {
 }
 
 @Composable
-private fun SearchBar(model: VaultModel) {
-    if (!model.searchOpen) return
-    var text by remember { mutableStateOf(model.query) }
-    LaunchedEffect(model.query) {
-        if (model.query.isEmpty() && text.isNotEmpty()) text = ""
-    }
-    LaunchedEffect(text) {
-        if (text == model.query) return@LaunchedEffect
-        delay(280)
-        model.setSearchQuery(text)
-    }
-    IncognitoField(
-        value = text,
-        onChange = { text = it },
-        label = "ค้นหาชื่อไฟล์/โฟลเดอร์ทั้งตู้",
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        autoFocus = true,
-        onDone = { model.setSearchQuery(text) },
-    )
-}
-
-@Composable
 private fun MainBar(model: VaultModel) {
+    if (model.searchOpen) {
+        var text by remember { mutableStateOf(model.query) }
+        val close = { model.searchOpen = false; model.setSearchQuery("") }
+        BackHandler(enabled = model.busy == null && model.viewer == null) { close() }
+        LaunchedEffect(model.query) {
+            if (model.query.isEmpty() && text.isNotEmpty()) text = ""
+        }
+        LaunchedEffect(text) {
+            if (text == model.query) return@LaunchedEffect
+            delay(280)
+            model.setSearchQuery(text)
+        }
+        TopAppBar(
+            title = {
+                CompactSearchField(
+                    value = text,
+                    onChange = { text = it },
+                    hint = "ค้นหาชื่อไฟล์/โฟลเดอร์ทั้งตู้",
+                    onDone = { model.setSearchQuery(text) },
+                )
+            },
+            navigationIcon = {
+                IconButton(onClick = close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "ปิดค้นหา") }
+            },
+            actions = {
+                if (text.isNotEmpty()) {
+                    IconButton(onClick = { text = ""; model.setSearchQuery("") }) {
+                        Icon(Icons.Filled.Close, "ล้างคำค้น")
+                    }
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.Bg),
+            windowInsets = WindowInsets(0, 0, 0, 0),
+        )
+        return
+    }
     var sortMenu by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     val l = model.listing
@@ -386,10 +398,7 @@ private fun MainBar(model: VaultModel) {
         actions = {
             if (model.folder != null && !l.searching)
                 IconButton(onClick = { model.pickFolderCover() }) { Icon(Icons.Filled.Wallpaper, "ตั้งภาพปกโฟลเดอร์") }
-            IconButton(onClick = {
-                model.searchOpen = !model.searchOpen
-                if (!model.searchOpen) model.setSearchQuery("")
-            }) { Icon(Icons.Filled.Search, "ค้นหา") }
+            IconButton(onClick = { model.searchOpen = true }) { Icon(Icons.Filled.Search, "ค้นหา") }
             Box {
                 IconButton(onClick = { sortMenu = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "เรียง") }
                 DropdownMenu(sortMenu, { sortMenu = false }) {

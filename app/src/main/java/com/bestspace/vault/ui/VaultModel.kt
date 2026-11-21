@@ -63,6 +63,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 enum class Gate { PERMISSION, SETUP, UNLOCK, MAIN }
 
+@androidx.compose.runtime.Immutable
 data class Item(
     val id: String, val name: String, val isDir: Boolean,
     val kind: String = "other", val mime: String = "", val size: Long = 0, val added: Double = 0.0,
@@ -74,10 +75,12 @@ data class Item(
     val media get() = kind == "image" || kind == "video"
 }
 
+@androidx.compose.runtime.Immutable
 data class Listing(
     val items: List<Item> = emptyList(), val counts: Map<String, Int> = emptyMap(),
     val files: Int = 0, val dirs: Int = 0, val bytes: Long = 0,
-    val crumbs: List<Pair<String?, String>> = listOf(null to "ตู้ของฉัน"), val searching: Boolean = false,
+    val crumbs: List<Pair<String?, String>> = listOf(null to "ตู้ของฉัน"),
+    val searching: Boolean = false, val searchQuery: String = "",
 )
 
 class Thumb(val image: ImageBitmap, val bitmap: Bitmap, val duration: Double?)
@@ -1106,13 +1109,14 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     private class VaultStats(
         val vault: Vault,
         val rev: Long,
-        val count: Map<String, Int>,
-        val cover: Map<String, String>,
+        val totalFiles: Int,
+        val totalDirs: Int,
         val totalBytes: Long,
-        val filesByParent: Map<String?, List<String>>,
-        val dirsByParent: Map<String?, List<String>>,
-        val dirSearch: List<Pair<String, String>>,
-        val fileSearch: List<Pair<String, String>>,
+        val filesByParent: Map<String?, List<Item>>,
+        val dirsByParent: Map<String?, List<Item>>,
+        val allDirs: List<Pair<Item, String>>,
+        val allFiles: List<Pair<Item, String>>,
+        val dirIds: Set<String>,
     )
     @Volatile private var statsCache: VaultStats? = null
     private var refreshJob: Job? = null
@@ -1123,32 +1127,49 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         val ents = v.files(); val dirs = v.folders()
         val count = HashMap<String, Int>()
         val coverBest = HashMap<String, Pair<String, Double>>()
-        val filesByParent = HashMap<String?, ArrayList<String>>()
-        val dirsByParent = HashMap<String?, ArrayList<String>>()
-        val dirSearch = ArrayList<Pair<String, String>>(dirs.size)
-        val fileSearch = ArrayList<Pair<String, String>>(ents.size)
+        val filesByParent = HashMap<String?, ArrayList<Item>>()
+        val dirsByParent = HashMap<String?, ArrayList<Item>>()
+        val allFiles = ArrayList<Pair<Item, String>>(ents.size)
         var total = 0L
-        for ((d, dv) in dirs) {
-            dirsByParent.getOrPut(v.parentOf(d)) { ArrayList() }.add(d)
-            dirSearch.add(d to (dv.asMap()["name"].asStr() ?: "").lowercase())
-        }
         for ((fid, ev) in ents) {
             val e = ev.asMap()
-            val name = e["name"].asStr() ?: ""
-            fileSearch.add(fid to name.lowercase())
-            total += e["size"].asLong()
-            val parent = v.parentOf(fid)
-            filesByParent.getOrPut(parent) { ArrayList() }.add(fid)
-            val media = Mime.kind(name, e["mime"].asStr() ?: "") in setOf("image", "video")
+            val name = e["name"].asStr() ?: "file"
+            val mime = e["mime"].asStr() ?: "application/octet-stream"
+            val k = Mime.kind(name, mime)
+            val size = e["size"].asLong()
             val added = e["added"].asDouble()
+            total += size
+            val item = Item(fid, name, false, k, mime, size, added,
+                origin = e["origin"].asStr(), pos = (e["pos"] as? Number)?.toDouble())
+            val parent = v.parentOf(fid)
+            filesByParent.getOrPut(parent) { ArrayList() }.add(item)
+            allFiles.add(item to name.lowercase())
+            val media = k == "image" || k == "video"
             for (d in v.folderChain(parent)) {
                 count[d] = (count[d] ?: 0) + 1
                 if (media && added > (coverBest[d]?.second ?: -1.0)) coverBest[d] = fid to added
             }
         }
-        val cover = HashMap<String, String>(coverBest.size)
-        for ((d, p) in coverBest) cover[d] = p.first
-        return VaultStats(v, rev, count, cover, total, filesByParent, dirsByParent, dirSearch, fileSearch).also { statsCache = it }
+        fun chosenCover(d: String): String? {
+            val c = dirs[d].asMap()["cover"].asStr() ?: return null
+            val e = ents[c]?.asMap() ?: return null
+            if (Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") !in setOf("image", "video")) return null
+            return if (d in v.folderChain(v.parentOf(c))) c else null
+        }
+        val allDirs = ArrayList<Pair<Item, String>>(dirs.size)
+        for ((d, dv) in dirs) {
+            val dm = dv.asMap()
+            val name = dm["name"].asStr() ?: "?"
+            val item = Item(d, name, true, count = count[d] ?: 0,
+                cover = chosenCover(d) ?: coverBest[d]?.first,
+                added = dm["created"].asDouble(),
+                pinned = dm["pinned"] == true,
+                pos = (dm["pos"] as? Number)?.toDouble())
+            dirsByParent.getOrPut(v.parentOf(d)) { ArrayList() }.add(item)
+            allDirs.add(item to name.lowercase())
+        }
+        return VaultStats(v, rev, ents.size, dirs.size, total, filesByParent, dirsByParent, allDirs, allFiles, HashSet(dirs.keys))
+            .also { statsCache = it }
     }
 
     fun setSearchQuery(q: String) {
@@ -1201,47 +1222,36 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun computeListing(cur0: String?, q: String, flt: String, mode: Int): Listing = synchronized(vault) {
-        if (!vault.isUnlocked) return Listing()
-        val ents = vault.files(); val dirs = vault.folders()
-        val cur = if (cur0 != null && dirs.containsKey(cur0)) cur0 else null
-        val st = getStatsLocked(vault)
-        fun chosenCover(d: String): String? {                 // ภาพปกที่ผู้ใช้เลือกไว้ – ยังอยู่ในโฟลเดอร์นี้และเป็นรูป/วิดีโอ
-            val c = dirs[d].asMap()["cover"].asStr() ?: return null
-            val e = ents[c]?.asMap() ?: return null
-            if (Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") !in setOf("image", "video")) return null
-            return if (d in vault.folderChain(vault.parentOf(c))) c else null
+    private fun computeListing(cur0: String?, q: String, flt: String, mode: Int): Listing {
+        val snap = synchronized(vault) {
+            if (!vault.isUnlocked) return Listing()
+            val st = getStatsLocked(vault)
+            val cur = if (cur0 != null && cur0 in st.dirIds) cur0 else null
+            val dirs = vault.folders()
+            val crumbs = listOf<Pair<String?, String>>(null to "ตู้ของฉัน") +
+                vault.folderChain(cur).map { it to (dirs[it].asMap()["name"].asStr() ?: "?") }
+            Triple(st, cur, crumbs)
         }
-        fun dirItem(d: String) = Item(d, dirs[d].asMap()["name"].asStr() ?: "?", true, count = st.count[d] ?: 0,
-            cover = chosenCover(d) ?: st.cover[d], added = dirs[d].asMap()["created"].asDouble(),
-            pinned = dirs[d].asMap()["pinned"] == true, pos = (dirs[d].asMap()["pos"] as? Number)?.toDouble())
-        val dirIds = if (q.isNotEmpty()) st.dirSearch.mapNotNull { (id, low) -> if (low.contains(q)) id else null }
+        val (st, cur, crumbs) = snap
+        val dirPool = if (q.isNotEmpty()) st.allDirs.mapNotNull { (item, low) -> if (low.contains(q)) item else null }
         else st.dirsByParent[cur] ?: emptyList()
-        val pool = if (q.isNotEmpty()) st.fileSearch.mapNotNull { (id, low) -> if (low.contains(q)) id else null }
+        val filePool = if (q.isNotEmpty()) st.allFiles.mapNotNull { (item, low) -> if (low.contains(q)) item else null }
         else st.filesByParent[cur] ?: emptyList()
         val counts = HashMap<String, Int>().apply { KINDS.forEach { put(it.first, 0) } }
-        val files = ArrayList<Item>(pool.size)
-        for (fid in pool) {
-            val e = ents[fid].asMap()
-            val name = e["name"].asStr() ?: "file"
-            val mime = e["mime"].asStr() ?: "application/octet-stream"
-            val k = Mime.kind(name, mime)
+        val files = ArrayList<Item>(filePool.size)
+        for (item in filePool) {
             counts["all"] = (counts["all"] ?: 0) + 1
-            counts[k] = (counts[k] ?: 0) + 1
-            if (flt == "all" || flt == k) files.add(Item(fid, name, false, k, mime, e["size"].asLong(), e["added"].asDouble(),
-                origin = e["origin"].asStr(), pos = (e["pos"] as? Number)?.toDouble()))
+            counts[item.kind] = (counts[item.kind] ?: 0) + 1
+            if (flt == "all" || flt == item.kind) files.add(item)
         }
-        var dItems = dirIds.map { dirItem(it) }
         sortFiles(files, mode)
-        dItems = when (mode) {
-            1 -> dItems.sortedBy { it.added }
-            SORT_CUSTOM -> dItems.sortedWith(compareBy<Item>({ it.pos != null }, { it.pos ?: 0.0 }, { it.name.lowercase() }))
-            else -> dItems.sortedBy { it.name.lowercase() }
+        var dItems = when (mode) {
+            1 -> dirPool.sortedBy { it.added }
+            SORT_CUSTOM -> dirPool.sortedWith(compareBy<Item>({ it.pos != null }, { it.pos ?: 0.0 }, { it.name.lowercase() }))
+            else -> dirPool.sortedBy { it.name.lowercase() }
         }
         dItems = dItems.sortedByDescending { it.pinned }      // โฟลเดอร์ที่ปักหมุดอยู่บนสุด (ลำดับที่เหลือคงเดิม)
-        val crumbs = listOf<Pair<String?, String>>(null to "ตู้ของฉัน") +
-            vault.folderChain(cur).map { it to (dirs[it].asMap()["name"].asStr() ?: "?") }
-        return Listing(dItems + files, counts, ents.size, dirs.size, st.totalBytes, crumbs, q.isNotEmpty())
+        return Listing(dItems + files, counts, st.totalFiles, st.totalDirs, st.totalBytes, crumbs, q.isNotEmpty(), q)
     }
 
     private val viewSaveMutex = Mutex()
@@ -1348,35 +1358,18 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     fun pickFolderCover() = flow {
         val d = folder ?: return@flow
         val (name, cands, cur) = synchronized(vault) {
-            val dirs = vault.folders(); val ents = vault.files()
+            val dirs = vault.folders()
             val st = getStatsLocked(vault)
-            fun chosenCover(dirId: String): String? {
-                val c = dirs[dirId].asMap()["cover"].asStr() ?: return null
-                val e = ents[c]?.asMap() ?: return null
-                if (Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") !in setOf("image", "video")) return null
-                return if (dirId in vault.folderChain(vault.parentOf(c))) c else null
-            }
             var dirCands = (st.dirsByParent[d] ?: emptyList()).mapNotNull { sub ->
-                val cov = chosenCover(sub) ?: st.cover[sub] ?: return@mapNotNull null
-                val dm = dirs[sub].asMap()
-                Item(cov, dm["name"].asStr() ?: "?", true,
-                    added = dm["created"].asDouble(),
-                    pinned = dm["pinned"] == true,
-                    pos = (dm["pos"] as? Number)?.toDouble())
+                val cov = sub.cover ?: return@mapNotNull null
+                sub.copy(id = cov)
             }
             dirCands = when (sort) {
                 1 -> dirCands.sortedBy { it.added }
                 SORT_CUSTOM -> dirCands.sortedWith(compareBy<Item>({ it.pos != null }, { it.pos ?: 0.0 }, { it.name.lowercase() }))
                 else -> dirCands.sortedBy { it.name.lowercase() }
             }.sortedByDescending { it.pinned }
-            val fileCands = ArrayList<Item>()
-            for (fid in (st.filesByParent[d] ?: emptyList())) {
-                val e = ents[fid].asMap()
-                val n = e["name"].asStr() ?: "file"; val mime = e["mime"].asStr() ?: ""
-                val k = Mime.kind(n, mime)
-                if (k != "image" && k != "video") continue
-                fileCands.add(Item(fid, n, false, k, mime, e["size"].asLong(), e["added"].asDouble(), pos = (e["pos"] as? Number)?.toDouble()))
-            }
+            val fileCands = (st.filesByParent[d] ?: emptyList()).filter { it.media }.toMutableList()
             sortFiles(fileCands, sort)
             Triple(dirs[d].asMap()["name"].asStr() ?: "โฟลเดอร์", (dirCands + fileCands).take(600), dirs[d].asMap()["cover"].asStr())
         }
