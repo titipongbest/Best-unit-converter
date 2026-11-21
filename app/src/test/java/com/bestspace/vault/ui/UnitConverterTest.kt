@@ -36,11 +36,13 @@ class UnitConverterTest {
     }
 
     @Test
-    fun formattingAndRevealTaps() {
+    fun formattingAndRevealTrigger() {
         assertEquals("1,000", UnitConverterEngine.formatValue(1000.0))
         assertEquals("0", UnitConverterEngine.formatValue(-0.0))
         assertEquals("1,234.5", UnitConverterEngine.formatInputDisplay("1234.5"))
-        assertEquals(3, DecoyConverter.REVEAL_C_TAPS)
-        assertTrue(DecoyConverter.REVEAL_WINDOW_MS >= 1500L)
+        assertEquals("weight", DecoyConverter.REVEAL_CAT_ID)
+        assertEquals("kg", DecoyConverter.REVEAL_UNIT_CODE)
+        assertEquals(45.0, DecoyConverter.REVEAL_VALUE, 1e-9)
+        assertTrue(UnitConverterEngine.categories.any { it.id == DecoyConverter.REVEAL_CAT_ID && it.units.any { u -> u.code == DecoyConverter.REVEAL_UNIT_CODE } })
     }
 }
