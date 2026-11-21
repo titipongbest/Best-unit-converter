@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.view.WindowManager
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.SystemBarStyle
@@ -53,6 +54,11 @@ class MainActivity : FragmentActivity(), Bridge {
         if (Build.VERSION.SDK_INT >= 31) window.setHideOverlayWindows(true)
         // Android 13+: ไม่เก็บภาพหน้าจอของแอปไว้ใช้ในหน้า "แอปล่าสุด" เลย (เสริม FLAG_SECURE)
         if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(false)
+        // ปิด Autofill/ContentCapture ทั้งหน้าต่าง: กันระบบกวาด tree ตอนโฟกัสช่องค้นหา (ลดอาการค้าง) + ไม่ให้ระบบ/AI แอบอ่านชื่อไฟล์ในตู้
+        window.decorView.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.decorView.importantForContentCapture = View.IMPORTANT_FOR_CONTENT_CAPTURE_NO_EXCLUDE_DESCENDANTS
+        }
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),

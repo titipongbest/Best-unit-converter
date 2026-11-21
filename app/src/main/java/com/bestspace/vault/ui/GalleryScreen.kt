@@ -349,10 +349,11 @@ fun GalleryScreen(model: VaultModel) {
 
 @Composable
 private fun MainBar(model: VaultModel) {
-    if (model.searchOpen) {
-        var text by remember { mutableStateOf(model.query) }
-        val close = { model.searchOpen = false; model.setSearchQuery("") }
-        BackHandler(enabled = model.busy == null && model.viewer == null) { close() }
+    val searchOpen = model.searchOpen
+    var text by remember(searchOpen) { mutableStateOf(if (searchOpen) model.query else "") }
+    val close = { model.searchOpen = false; model.setSearchQuery("") }
+    BackHandler(enabled = searchOpen && model.busy == null && model.viewer == null) { close() }
+    if (searchOpen) {
         LaunchedEffect(model.query) {
             if (model.query.isEmpty() && text.isNotEmpty()) text = ""
         }
@@ -361,80 +362,79 @@ private fun MainBar(model: VaultModel) {
             delay(280)
             model.setSearchQuery(text)
         }
-        TopAppBar(
-            title = {
+    }
+    var sortMenu by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    TopAppBar(
+        title = {
+            if (searchOpen) {
                 CompactSearchField(
                     value = text,
                     onChange = { text = it },
                     hint = "ค้นหาชื่อไฟล์/โฟลเดอร์ทั้งตู้",
                     onDone = { model.setSearchQuery(text) },
                 )
-            },
-            navigationIcon = {
+            } else {
+                val l = model.listing
+                Text(if (model.folder == null) "BestSpace" else l.crumbs.last().second, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        },
+        navigationIcon = {
+            if (searchOpen) {
                 IconButton(onClick = close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "ปิดค้นหา") }
-            },
-            actions = {
+            } else if (model.folder != null) {
+                IconButton(onClick = { model.up() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "ขึ้น") }
+            }
+        },
+        actions = {
+            if (searchOpen) {
                 if (text.isNotEmpty()) {
                     IconButton(onClick = { text = ""; model.setSearchQuery("") }) {
                         Icon(Icons.Filled.Close, "ล้างคำค้น")
                     }
                 }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = Palette.Bg),
-            windowInsets = WindowInsets(0, 0, 0, 0),
-        )
-        return
-    }
-    var sortMenu by remember { mutableStateOf(false) }
-    var menu by remember { mutableStateOf(false) }
-    val l = model.listing
-    TopAppBar(
-        title = {
-            Text(if (model.folder == null) "BestSpace" else l.crumbs.last().second, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        },
-        navigationIcon = {
-            if (model.folder != null) IconButton(onClick = { model.up() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "ขึ้น") }
-        },
-        actions = {
-            if (model.folder != null && !l.searching)
-                IconButton(onClick = { model.pickFolderCover() }) { Icon(Icons.Filled.Wallpaper, "ตั้งภาพปกโฟลเดอร์") }
-            IconButton(onClick = { model.searchOpen = true }) { Icon(Icons.Filled.Search, "ค้นหา") }
-            Box {
-                IconButton(onClick = { sortMenu = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "เรียง") }
-                DropdownMenu(sortMenu, { sortMenu = false }) {
-                    VaultModel.SORTS.forEachIndexed { i, s ->
-                        DropdownMenuItem(text = { Text((if (i == model.sort) "✓  " else "     ") + s) },
-                            onClick = { sortMenu = false; model.setSortMode(i) })
+            } else {
+                val l = model.listing
+                if (model.folder != null && !l.searching)
+                    IconButton(onClick = { model.pickFolderCover() }) { Icon(Icons.Filled.Wallpaper, "ตั้งภาพปกโฟลเดอร์") }
+                IconButton(onClick = { model.openSearch() }) { Icon(Icons.Filled.Search, "ค้นหา") }
+                Box {
+                    IconButton(onClick = { sortMenu = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "เรียง") }
+                    DropdownMenu(sortMenu, { sortMenu = false }) {
+                        VaultModel.SORTS.forEachIndexed { i, s ->
+                            DropdownMenuItem(text = { Text((if (i == model.sort) "✓  " else "     ") + s) },
+                                onClick = { sortMenu = false; model.setSortMode(i) })
+                        }
                     }
                 }
-            }
-            IconButton(onClick = { model.requestLock("ล็อคแล้ว") }) { Icon(Icons.Filled.Lock, "ล็อค") }
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "เมนู") }
-                DropdownMenu(menu, { menu = false }) {
-                    Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("ขนาดภาพย่อ", Modifier.weight(1f))
-                        TextButton(onClick = { model.setCols(model.columns + 1) }, enabled = model.columns < 6) { Text("−") }
-                        Text("${model.columns}")
-                        TextButton(onClick = { model.setCols(model.columns - 1) }, enabled = model.columns > 2) { Text("+") }
-                    }
-                    HorizontalDivider()
-                    MenuItem("💾 สำรองทั้งตู้ (ยังเข้ารหัส) ไปยังโฟลเดอร์…") { menu = false; model.backupVault() }
-                    MenuItem("🔑 เปลี่ยนรหัสผ่านหลัก…") { menu = false; model.changePassword() }
-                    if (!model.fakeSession) {
-                        if (model.needsKey) {
-                            MenuItem("🔑 สำรองไฟล์กุญแจ…") { menu = false; model.backupKeyfile() }
-                            if (model.rememberedKeyMode != null) {
-                                MenuItem("🗑 ลืมไฟล์กุญแจที่จำไว้…") { menu = false; model.forgetRememberedKeyfile() }
-                            }
+                IconButton(onClick = { model.requestLock("ล็อคแล้ว") }) { Icon(Icons.Filled.Lock, "ล็อค") }
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "เมนู") }
+                    DropdownMenu(menu, { menu = false }) {
+                        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("ขนาดภาพย่อ", Modifier.weight(1f))
+                            TextButton(onClick = { model.setCols(model.columns + 1) }, enabled = model.columns < 6) { Text("−") }
+                            Text("${model.columns}")
+                            TextButton(onClick = { model.setCols(model.columns - 1) }, enabled = model.columns > 2) { Text("+") }
                         }
-                        else MenuItem("🔑 เพิ่มไฟล์กุญแจให้ตู้นี้ (กันเดารหัสออฟไลน์)…") { menu = false; model.addKeyfile() }
-                        MenuItem("🎭 ตู้หลอก…") { menu = false; model.fakeVaultMenu() }
+                        HorizontalDivider()
+                        MenuItem("💾 สำรองทั้งตู้ (ยังเข้ารหัส) ไปยังโฟลเดอร์…") { menu = false; model.backupVault() }
+                        MenuItem("🔑 เปลี่ยนรหัสผ่านหลัก…") { menu = false; model.changePassword() }
+                        if (!model.fakeSession) {
+                            if (model.needsKey) {
+                                MenuItem("🔑 สำรองไฟล์กุญแจ…") { menu = false; model.backupKeyfile() }
+                                if (model.rememberedKeyMode != null) {
+                                    MenuItem("🗑 ลืมไฟล์กุญแจที่จำไว้…") { menu = false; model.forgetRememberedKeyfile() }
+                                }
+                            }
+                            else MenuItem("🔑 เพิ่มไฟล์กุญแจให้ตู้นี้ (กันเดารหัสออฟไลน์)…") { menu = false; model.addKeyfile() }
+                            MenuItem("🎭 ตู้หลอก…") { menu = false; model.fakeVaultMenu() }
+                        }
+                        MenuItem("🧹 ล้างแคชและร่องรอย…") { menu = false; model.clearCache() }
+                        MenuItem("📂 เลือกตู้อื่น…") { menu = false; model.browseVault() }
+                        HorizontalDivider()
+                        MenuItem("🛡 ความปลอดภัย / เกี่ยวกับ") { menu = false; model.securityInfo() }
                     }
-                    MenuItem("🧹 ล้างแคชและร่องรอย…") { menu = false; model.clearCache() }
-                    MenuItem("📂 เลือกตู้อื่น…") { menu = false; model.browseVault() }
-                    HorizontalDivider()
-                    MenuItem("🛡 ความปลอดภัย / เกี่ยวกับ") { menu = false; model.securityInfo() }
                 }
             }
         },

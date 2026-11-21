@@ -13,17 +13,23 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ScrollView
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -31,8 +37,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.PlatformTextInputMethodRequest
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.bestspace.vault.core.Crypto
@@ -308,7 +327,8 @@ fun IncognitoField(
     }
 }
 
-/** ช่องค้นหาแบบกะทัดรัดสำหรับวางใน TopAppBar (ความสูงเท่าแถบเดิม ไม่ดันกริดลง และคีย์บอร์ดไม่จำคำค้น) */
+/** ช่องค้นหาแบบกะทัดรัดสำหรับวางใน TopAppBar (Pure Compose BasicTextField + โหมดไม่ระบุตัวตนของคีย์บอร์ด – ไม่สร้าง AndroidView ลดอาการเคอร์เซอร์/คีย์บอร์ดค้าง) */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun CompactSearchField(
     value: String,
@@ -317,61 +337,57 @@ fun CompactSearchField(
     modifier: Modifier = Modifier,
     onDone: (() -> Unit)? = null,
 ) {
-    val change by rememberUpdatedState(onChange)
     val done by rememberUpdatedState(onDone)
-    var ref by remember { mutableStateOf<SecureEditText?>(null) }
-    DisposableEffect(Unit) {
-        onDispose {
-            ref?.let { et ->
-                (et.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                    ?.hideSoftInputFromWindow(et.windowToken, 0)
-                wipeEditable(et.text)
-            }
-            ref = null
-        }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        try { focusRequester.requestFocus() } catch (_: Throwable) {}
+        keyboard?.show()
     }
-    AndroidView(
-        modifier = modifier.fillMaxWidth(),
-        factory = { ctx ->
-            SecureEditText(ctx).apply {
-                ref = this
-                background = null
-                setPadding(0, 0, 0, 0)
-                setTextColor(Palette.FgInt)
-                setHintTextColor(Palette.MutedInt)
-                setHint(hint)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-                isSingleLine = true
-                imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_ACTION_SEARCH or
-                    EditorInfo.IME_FLAG_NO_EXTRACT_UI
-                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-                setText(value)
-                setSelection(text.length)
-                addTextChangedListener(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                    override fun afterTextChanged(s: Editable?) { change(s?.toString() ?: "") }
-                })
-                setOnEditorActionListener { _, action, _ ->
-                    if ((action == EditorInfo.IME_ACTION_SEARCH || action == EditorInfo.IME_ACTION_DONE) && done != null) {
-                        done?.invoke(); true
-                    } else false
-                }
-                post {
-                    if (isAttachedToWindow) {
-                        requestFocus()
-                        (ctx.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                            ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-                    }
+    DisposableEffect(Unit) {
+        onDispose { keyboard?.hide() }
+    }
+    InterceptPlatformTextInput(
+        interceptor = { request, nextHandler ->
+            val modified = PlatformTextInputMethodRequest { outAttributes ->
+                request.createInputConnection(outAttributes).also {
+                    outAttributes.imeOptions = outAttributes.imeOptions or
+                        EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or
+                        EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                    outAttributes.inputType = outAttributes.inputType or
+                        InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 }
             }
-        },
-        update = { et ->
-            ref = et
-            if (et.text.toString() != value) { et.setText(value); et.setSelection(et.text.length) }
-        },
-    )
+            nextHandler.startInputMethod(modified)
+        }
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = TextStyle(color = Palette.Fg, fontSize = 16.sp),
+            cursorBrush = SolidColor(Palette.Accent),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Search,
+            ),
+            keyboardActions = KeyboardActions(
+                onSearch = { done?.invoke() },
+                onDone = { done?.invoke() },
+            ),
+            modifier = modifier.fillMaxWidth().focusRequester(focusRequester),
+            decorationBox = { inner ->
+                Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
+                    if (value.isEmpty()) {
+                        Text(hint, color = Palette.Muted, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    inner()
+                }
+            },
+        )
+    }
 }
 
 private fun typeFor(password: Boolean, show: Boolean): Int = when {

@@ -1397,12 +1397,29 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         notice = "ตั้งเป็นภาพปกโฟลเดอร์แล้ว"
     }
 
+    @Volatile private var thumbPauseUntil = 0L
+
+    fun openSearch() {
+        thumbPauseUntil = SystemClock.uptimeMillis() + 350L
+        searchOpen = true
+    }
+
+    private inline fun <T> withBackgroundPriority(block: () -> T): T {
+        val prev = try { android.os.Process.getThreadPriority(android.os.Process.myTid()) } catch (_: Throwable) { null }
+        if (prev != null) try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) } catch (_: Throwable) {}
+        return try { block() } finally {
+            if (prev != null) try { android.os.Process.setThreadPriority(prev) } catch (_: Throwable) {}
+        }
+    }
+
     suspend fun thumb(fid: String): Thumb? {
         synchronized(thumbs) { thumbs[fid] }?.let { return it }
         val gen = lockGen
         while (true) {
             if (gen != lockGen || !vault.isUnlocked) return null
             synchronized(thumbs) { thumbs[fid] }?.let { return it }
+            val pause = thumbPauseUntil - SystemClock.uptimeMillis()
+            if (pause > 0L) delay(pause.coerceAtMost(400L))
             val existing = thumbInFlight[fid]
             if (existing != null) {
                 val res = try { existing.await() } catch (_: CancellationException) { null }
@@ -1413,10 +1430,12 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             if (thumbInFlight.putIfAbsent(fid, ours) != null) continue
             try {
                 val outcome = thumbGate.withPermit {
+                    val p2 = thumbPauseUntil - SystemClock.uptimeMillis()
+                    if (p2 > 0L) delay(p2.coerceAtMost(400L))
                     withContext(Dispatchers.IO) {
                         if (gen != lockGen || !vault.isUnlocked) return@withContext ThumbOutcome(null)
                         synchronized(thumbs) { thumbs[fid] }?.let { return@withContext ThumbOutcome(it) }
-                        val r = try { Media.thumb(vault, fid) } catch (e: Throwable) { null }
+                        val r = withBackgroundPriority { try { Media.thumb(vault, fid) } catch (e: Throwable) { null } }
                             ?: return@withContext ThumbOutcome(null)
                         if (gen != lockGen) { Media.wipeBitmap(r.first); return@withContext ThumbOutcome(null) }
                         val t = Thumb(r.first.asImageBitmap(), r.first, r.second)
@@ -1464,10 +1483,12 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
     suspend fun snippet(fid: String): String? {
         snippetCached(fid)?.let { return it }
         val gen = lockGen
+        val pause = thumbPauseUntil - SystemClock.uptimeMillis()
+        if (pause > 0L) delay(pause.coerceAtMost(400L))
         return thumbGate.withPermit {
             withContext(Dispatchers.IO) {
                 if (gen != lockGen || !vault.isUnlocked) return@withContext null
-                val text = readSnippet(fid) ?: return@withContext null
+                val text = withBackgroundPriority { readSnippet(fid) } ?: return@withContext null
                 if (gen != lockGen) return@withContext null
                 synchronized(snippets) { snippets[fid] = text; snippetRead[fid] = text }
                 text
