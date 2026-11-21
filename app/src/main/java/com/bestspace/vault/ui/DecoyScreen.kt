@@ -84,11 +84,12 @@ import kotlin.math.abs
 /**
  * หน้าพราง: แอปแปลงหน่วย (Unit Converter) แบบออฟไลน์
  * – แตะปุ่มสลับหน่วย (⇄) = สลับหน่วยต้นทาง/ปลายทางตามปกติ
- * – กดปุ่ม C ติดต่อกัน 3 ครั้ง = เข้าหน้ารหัสผ่านของตู้ (ไม่มีสั่น/ภาพบอกใบ้)
+ * – หมวดน้ำหนัก หน่วยต้นทาง kg กรอก 45 แล้วกด = = เข้าหน้ารหัสผ่านของตู้ (ไม่บันทึกลงประวัติ)
  */
 object DecoyConverter {
-    const val REVEAL_C_TAPS = 3
-    const val REVEAL_WINDOW_MS = 3000L
+    const val REVEAL_CAT_ID = "weight"
+    const val REVEAL_UNIT_CODE = "kg"
+    const val REVEAL_VALUE = 45.0
 
     data class HistoryItem(
         val id: Long,
@@ -364,19 +365,12 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
     var fromIdx by remember { mutableIntStateOf(initial.second) }
     var toIdx by remember { mutableIntStateOf(initial.third) }
     var inputRaw by remember { mutableStateOf("1") }
-    var cTapCount by remember { mutableIntStateOf(0) }
-    var lastCTapMs by remember { mutableLongStateOf(0L) }
     var showHistory by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var copiedBanner by remember { mutableStateOf(false) }
     val history = remember { mutableStateListOf<DecoyConverter.HistoryItem>().apply { addAll(DecoyConverter.loadHistory(ctx)) } }
     val locked = remember(settings) { NotesLockStore.isSet(ctx) }
     val hold by rememberUpdatedState(onHold)
-
-    fun resetRevealTaps() {
-        cTapCount = 0
-        lastCTapMs = 0L
-    }
 
     LaunchedEffect(copiedBanner) {
         if (copiedBanner) {
@@ -400,7 +394,6 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
     val oneUnitText = UnitConverterEngine.formatValue(UnitConverterEngine.convert(1.0, fromUnit, toUnit))
 
     fun persistState(c: Int, f: Int, t: Int) {
-        resetRevealTaps()
         catIdx = c
         fromIdx = f
         toIdx = t
@@ -438,19 +431,8 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
     }
 
     fun onKey(k: String) {
-        if (k == "C") {
-            inputRaw = "0"
-            val now = SystemClock.elapsedRealtime()
-            cTapCount = if (now - lastCTapMs <= DecoyConverter.REVEAL_WINDOW_MS) cTapCount + 1 else 1
-            lastCTapMs = now
-            if (cTapCount >= DecoyConverter.REVEAL_C_TAPS) {
-                resetRevealTaps()
-                hold()
-            }
-            return
-        }
-        resetRevealTaps()
         when (k) {
+            "C" -> inputRaw = "0"
             "⌫" -> {
                 inputRaw = when {
                     inputRaw.length <= 1 || (inputRaw.length == 2 && inputRaw.startsWith("-")) -> "0"
@@ -469,7 +451,17 @@ fun DecoyScreen(onHold: () -> Unit, onLockNow: () -> Unit) {
                     inputRaw = if (inputRaw.isEmpty() || inputRaw == "-") "${inputRaw}0." else "$inputRaw."
                 }
             }
-            "=" -> recordCurrent()
+            "=" -> {
+                if (category.id == DecoyConverter.REVEAL_CAT_ID &&
+                    fromUnit.code == DecoyConverter.REVEAL_UNIT_CODE &&
+                    inputRaw.toDoubleOrNull() == DecoyConverter.REVEAL_VALUE
+                ) {
+                    inputRaw = "0"
+                    hold()
+                } else {
+                    recordCurrent()
+                }
+            }
             else -> {
                 val digitsOnly = inputRaw.replace("-", "").replace(".", "")
                 if (digitsOnly.length >= 13) return
