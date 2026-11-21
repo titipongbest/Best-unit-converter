@@ -280,11 +280,13 @@ fun IncognitoField(
                         setOnEditorActionListener { _, action, _ ->
                             if (action == EditorInfo.IME_ACTION_DONE && done != null) { done?.invoke(); true } else false
                         }
-                        if (autoFocus) post {
-                            requestFocus()
-                            (ctx.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                                ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-                        }
+                        if (autoFocus) postDelayed({
+                            if (isAttachedToWindow) {
+                                requestFocus()
+                                (ctx.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                                    ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+                            }
+                        }, 60)
                     }
                 },
                 update = { et ->

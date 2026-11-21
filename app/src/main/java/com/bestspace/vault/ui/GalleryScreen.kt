@@ -196,15 +196,10 @@ fun GalleryScreen(model: VaultModel) {
             delay(16)
         }
     }
-    var lastQuery by remember { mutableStateOf(model.query) }
-    LaunchedEffect(model.query) {
-        if (model.query == lastQuery) return@LaunchedEffect
-        delay(250); lastQuery = model.query; model.refresh()
-    }
     BackHandler(enabled = model.busy == null && model.viewer == null && (sel.isNotEmpty() || model.folder != null || model.searchOpen)) {
         when {
             sel.isNotEmpty() -> sel.clear()
-            model.searchOpen -> { model.searchOpen = false; model.query = ""; model.refresh() }
+            model.searchOpen -> { model.searchOpen = false; model.setSearchQuery("") }
             else -> model.up()
         }
     }
@@ -216,10 +211,7 @@ fun GalleryScreen(model: VaultModel) {
         floatingActionButton = { if (sel.isEmpty()) AddFab(model) },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
-            if (model.searchOpen) {
-                IncognitoField(model.query, { model.query = it }, "ค้นหาชื่อไฟล์/โฟลเดอร์ทั้งตู้",
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp), autoFocus = true)
-            }
+            SearchBar(model)
             if (l.searching) {
                 Text("🔍 ผลการค้นหาทั้งตู้: “${model.query.trim()}”", color = Palette.Muted, fontSize = 13.sp,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
@@ -358,6 +350,28 @@ fun GalleryScreen(model: VaultModel) {
 }
 
 @Composable
+private fun SearchBar(model: VaultModel) {
+    if (!model.searchOpen) return
+    var text by remember { mutableStateOf(model.query) }
+    LaunchedEffect(model.query) {
+        if (model.query.isEmpty() && text.isNotEmpty()) text = ""
+    }
+    LaunchedEffect(text) {
+        if (text == model.query) return@LaunchedEffect
+        delay(280)
+        model.setSearchQuery(text)
+    }
+    IncognitoField(
+        value = text,
+        onChange = { text = it },
+        label = "ค้นหาชื่อไฟล์/โฟลเดอร์ทั้งตู้",
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        autoFocus = true,
+        onDone = { model.setSearchQuery(text) },
+    )
+}
+
+@Composable
 private fun MainBar(model: VaultModel) {
     var sortMenu by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
@@ -374,7 +388,7 @@ private fun MainBar(model: VaultModel) {
                 IconButton(onClick = { model.pickFolderCover() }) { Icon(Icons.Filled.Wallpaper, "ตั้งภาพปกโฟลเดอร์") }
             IconButton(onClick = {
                 model.searchOpen = !model.searchOpen
-                if (!model.searchOpen && model.query.isNotEmpty()) { model.query = ""; model.refresh() }
+                if (!model.searchOpen) model.setSearchQuery("")
             }) { Icon(Icons.Filled.Search, "ค้นหา") }
             Box {
                 IconButton(onClick = { sortMenu = true }) { Icon(Icons.AutoMirrored.Filled.Sort, "เรียง") }

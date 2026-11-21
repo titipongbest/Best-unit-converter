@@ -1111,6 +1111,8 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         val totalBytes: Long,
         val filesByParent: Map<String?, List<String>>,
         val dirsByParent: Map<String?, List<String>>,
+        val dirSearch: List<Pair<String, String>>,
+        val fileSearch: List<Pair<String, String>>,
     )
     @Volatile private var statsCache: VaultStats? = null
     private var refreshJob: Job? = null
@@ -1123,16 +1125,21 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         val coverBest = HashMap<String, Pair<String, Double>>()
         val filesByParent = HashMap<String?, ArrayList<String>>()
         val dirsByParent = HashMap<String?, ArrayList<String>>()
+        val dirSearch = ArrayList<Pair<String, String>>(dirs.size)
+        val fileSearch = ArrayList<Pair<String, String>>(ents.size)
         var total = 0L
-        for (d in dirs.keys) {
+        for ((d, dv) in dirs) {
             dirsByParent.getOrPut(v.parentOf(d)) { ArrayList() }.add(d)
+            dirSearch.add(d to (dv.asMap()["name"].asStr() ?: "").lowercase())
         }
         for ((fid, ev) in ents) {
             val e = ev.asMap()
+            val name = e["name"].asStr() ?: ""
+            fileSearch.add(fid to name.lowercase())
             total += e["size"].asLong()
             val parent = v.parentOf(fid)
             filesByParent.getOrPut(parent) { ArrayList() }.add(fid)
-            val media = Mime.kind(e["name"].asStr() ?: "", e["mime"].asStr() ?: "") in setOf("image", "video")
+            val media = Mime.kind(name, e["mime"].asStr() ?: "") in setOf("image", "video")
             val added = e["added"].asDouble()
             for (d in v.folderChain(parent)) {
                 count[d] = (count[d] ?: 0) + 1
@@ -1141,7 +1148,13 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         }
         val cover = HashMap<String, String>(coverBest.size)
         for ((d, p) in coverBest) cover[d] = p.first
-        return VaultStats(v, rev, count, cover, total, filesByParent, dirsByParent).also { statsCache = it }
+        return VaultStats(v, rev, count, cover, total, filesByParent, dirsByParent, dirSearch, fileSearch).also { statsCache = it }
+    }
+
+    fun setSearchQuery(q: String) {
+        if (query == q) return
+        query = q
+        refresh()
     }
 
     fun refresh() {
@@ -1153,7 +1166,7 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
             val l = withContext(Dispatchers.Default) { try { computeListing(f, q, flt, s) } catch (e: Exception) { null } }
             if (gen == lockGen && l != null && vault.isUnlocked) {
                 listing = l
-                selected.retainAll(l.items.map { it.id }.toSet())
+                if (selected.isNotEmpty()) selected.retainAll(l.items.map { it.id }.toSet())
                 version++
             }
         }
@@ -1202,9 +1215,9 @@ class VaultModel(private val app: Application) : AndroidViewModel(app) {
         fun dirItem(d: String) = Item(d, dirs[d].asMap()["name"].asStr() ?: "?", true, count = st.count[d] ?: 0,
             cover = chosenCover(d) ?: st.cover[d], added = dirs[d].asMap()["created"].asDouble(),
             pinned = dirs[d].asMap()["pinned"] == true, pos = (dirs[d].asMap()["pos"] as? Number)?.toDouble())
-        val dirIds = if (q.isNotEmpty()) dirs.keys.filter { (dirs[it].asMap()["name"].asStr() ?: "").lowercase().contains(q) }
+        val dirIds = if (q.isNotEmpty()) st.dirSearch.mapNotNull { (id, low) -> if (low.contains(q)) id else null }
         else st.dirsByParent[cur] ?: emptyList()
-        val pool = if (q.isNotEmpty()) ents.keys.filter { (ents[it].asMap()["name"].asStr() ?: "").lowercase().contains(q) }
+        val pool = if (q.isNotEmpty()) st.fileSearch.mapNotNull { (id, low) -> if (low.contains(q)) id else null }
         else st.filesByParent[cur] ?: emptyList()
         val counts = HashMap<String, Int>().apply { KINDS.forEach { put(it.first, 0) } }
         val files = ArrayList<Item>(pool.size)
